@@ -31,6 +31,21 @@ Input: `$ARGUMENTS` (all optional; spec-flow auto-detects project name from the 
 
    **Multi-repo (`--repos`):** when one SRS/SD is implemented across several service repos, pass `--repos "auth-svc=../auth-svc,billing-svc=../billing-svc"` (logical name = relative path from THIS hub repo). This seeds `config.repos`, and from then on `verify-code` scans every repo, `branch-ensure` branches every repo, and `/sf:phase` cd's into the right one per task. Omit it for the normal single-repo case. Editable later in `config.json` → `repos`.
 
+   **Mixed build tools:** `config.stack` and `config.verify` are project-wide, so a hub whose repos do not share one build tool (Gradle services next to a Maven gateway) needs a per-repo override. Any entry in `config.repos` may be an object instead of a path string:
+
+   ```json
+   "repos": {
+     "wallet-ms": "../wallet-ms",
+     "eid-gateway": {
+       "path": "../eid-gateway",
+       "stack": "java-maven",
+       "verify": { "testCommand": "./mvnw -q test" }
+     }
+   }
+   ```
+
+   Anything omitted inherits from the top level; `stack` also picks the scoped-test filter syntax (`--tests` for Gradle, `-Dtest=` for Maven). Without an override, `verify-code` auto-detects a root's build tool whenever the inherited `testCommand` provably cannot run there, and says so in the report — `/sf:doctor` flags the same mismatch with the exact override to paste.
+
    `srs/` is the recommended home for input docs — one live, editable file per feature, `.spec-flow/srs/<feature>.md` (a formal SRS *or* just your idea/description; it plays the SRS role). You edit this file; `srs-snapshot` freezes immutable baselines into `snapshots/` at each ingest/resync. `/sf:ingest` and `/sf:resync` still accept any path — `srs/` is convention, not enforced.
 
 3. **Set up Task Master** (delegated to Task Master's own CLI — idempotent + **fail-isolated**)

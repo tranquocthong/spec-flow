@@ -356,3 +356,129 @@ test('versionSyncStatus: a non-string version is treated as absent, not compared
   assert.equal(r.status, 'warn');
   assert.match(r.detail, /version field absent/);
 });
+
+// ---------------------------------------------------------------------------
+// Per-repo build tool (mixed-toolchain hubs)
+// ---------------------------------------------------------------------------
+
+const fsx = require('node:fs');
+const osx = require('node:os');
+const pathx = require('node:path');
+
+/** Temp dir seeded with the given marker files (name → contents). */
+function mkRepo(markers) {
+  const d = fsx.mkdtempSync(pathx.join(osx.tmpdir(), 'sf-repo-'));
+  for (const [name, body] of Object.entries(markers || {})) {
+    fsx.writeFileSync(pathx.join(d, name), body == null ? '' : String(body));
+  }
+  return d;
+}
+
+test('resolveRepos: string entry keeps the old shape and adds null overrides', () => {
+  const cwd = process.cwd();
+  const roots = core.resolveRepos({ repos: { 'svc-a': '../svc-a' } });
+  assert.equal(roots.length, 1);
+  assert.equal(roots[0].name, 'svc-a');
+  assert.equal(roots[0].root, pathx.resolve(cwd, '../svc-a'));
+  assert.equal(roots[0].stack, null);
+  assert.equal(roots[0].verify, null);
+});
+
+test('resolveRepos: object entry carries path + per-repo stack/verify overrides', () => {
+  const roots = core.resolveRepos({
+    repos: {
+      'svc-a': '../svc-a',
+      'gw': { path: '../gw', stack: 'java-maven', verify: { testCommand: 'mvn -q test' } },
+    },
+  });
+  const gw = roots.find((r) => r.name === 'gw');
+  assert.equal(gw.root, pathx.resolve(process.cwd(), '../gw'));
+  assert.equal(gw.stack, 'java-maven');
+  assert.deepEqual(gw.verify, { testCommand: 'mvn -q test' });
+  assert.equal(roots.find((r) => r.name === 'svc-a').stack, null, 'string entries unaffected');
+});
+
+test('resolveRepos: no repos → single cwd root (backward compat)', () => {
+  const roots = core.resolveRepos({ stack: 'node' });
+  assert.equal(roots.length, 1);
+  assert.equal(roots[0].name, null);
+  assert.equal(roots[0].root, process.cwd());
+});
+
+test('detectRepoStack: recognizes gradle / maven / node / python / go by marker', () => {
+  assert.deepEqual(core.detectRepoStack(mkRepo({ 'build.gradle': '', gradlew: '' })),
+    { stack: 'java-spring', testCommand: './gradlew test' });
+  assert.deepEqual(core.detectRepoStack(mkRepo({ 'build.gradle.kts': '' })),
+    { stack: 'java-spring', testCommand: 'gradle test' });
+  assert.deepEqual(core.detectRepoStack(mkRepo({ 'pom.xml': '', mvnw: '' })),
+    { stack: 'java-maven', testCommand: './mvnw -q test' });
+  assert.deepEqual(core.detectRepoStack(mkRepo({ 'pom.xml': '' })),
+    { stack: 'java-maven', testCommand: 'mvn -q test' });
+  assert.equal(core.detectRepoStack(mkRepo({ 'package.json': '{}' })).stack, 'node');
+  assert.equal(core.detectRepoStack(mkRepo({ 'go.mod': '' })).stack, 'go');
+  assert.equal(core.detectRepoStack(mkRepo({ 'README.md': '' })), null, 'unknown root → null');
+});
+
+test('detectRepoStack: gradle wins over maven when a repo carries both', () => {
+  const d = mkRepo({ 'build.gradle': '', gradlew: '', 'pom.xml': '' });
+  assert.equal(core.detectRepoStack(d).stack, 'java-spring');
+});
+
+test('commandRunsIn: false only when the answer is certain', () => {
+  const maven = mkRepo({ 'pom.xml': '', mvnw: '' });
+  const gradle = mkRepo({ 'build.gradle': '', gradlew: '' });
+  assert.equal(core.commandRunsIn('./gradlew test', maven), false, 'no gradlew on disk');
+  assert.equal(core.commandRunsIn('./gradlew test', gradle), true);
+  assert.equal(core.commandRunsIn('mvn -q test', gradle), false, 'no pom.xml');
+  assert.equal(core.commandRunsIn('mvn -q test', maven), true);
+  assert.equal(core.commandRunsIn('npm test', maven), false, 'no package.json');
+  // Unrecognized / absolute / empty → never second-guessed.
+  assert.equal(core.commandRunsIn('for f in test/*.cjs; do node "$f"; done', maven), true);
+  assert.equal(core.commandRunsIn('/usr/local/bin/ci-test', maven), true);
+  assert.equal(core.commandRunsIn(null, maven), true);
+});
+
+test('resolveRepoVerify: explicit per-repo override wins, no auto-detection note', () => {
+  const gw = mkRepo({ 'pom.xml': '', mvnw: '' });
+  const eff = core.resolveRepoVerify(
+    { stack: 'java-spring', verify: { testCommand: './gradlew test', coverageThreshold: 80 } },
+    { name: 'gw', root: gw, stack: 'java-maven', verify: { testCommand: 'mvn -q test' } },
+  );
+  assert.equal(eff.stack, 'java-maven');
+  assert.equal(eff.verify.testCommand, 'mvn -q test');
+  assert.equal(eff.verify.coverageThreshold, 80, 'unlisted keys inherit from the project verify block');
+  assert.equal(eff.note, null, 'explicit config is never overridden by detection');
+});
+
+test('resolveRepoVerify: auto-detects when the inherited command cannot run there', () => {
+  const gw = mkRepo({ 'pom.xml': '', mvnw: '' });
+  const eff = core.resolveRepoVerify(
+    { stack: 'java-spring', verify: { testCommand: './gradlew test' } },
+    { name: 'eid-gateway', root: gw, stack: null, verify: null },
+  );
+  assert.equal(eff.stack, 'java-maven');
+  assert.equal(eff.verify.testCommand, './mvnw -q test');
+  assert.match(eff.note, /auto-detected java-maven in eid-gateway/);
+  assert.equal(eff.detected, true);
+});
+
+test('resolveRepoVerify: a runnable inherited command is left alone', () => {
+  const svc = mkRepo({ 'build.gradle': '', gradlew: '' });
+  const eff = core.resolveRepoVerify(
+    { stack: 'java-spring', verify: { testCommand: './gradlew test' } },
+    { name: 'wallet-ms', root: svc, stack: null, verify: null },
+  );
+  assert.equal(eff.stack, 'java-spring');
+  assert.equal(eff.verify.testCommand, './gradlew test');
+  assert.equal(eff.note, null);
+});
+
+test('resolveRepoVerify: unrunnable command + unknown build tool → note, command untouched', () => {
+  const bare = mkRepo({ 'README.md': '' });
+  const eff = core.resolveRepoVerify(
+    { stack: 'java-spring', verify: { testCommand: './gradlew test' } },
+    { name: 'docs-repo', root: bare, stack: null, verify: null },
+  );
+  assert.equal(eff.verify.testCommand, './gradlew test', 'nothing to swap in — leave it');
+  assert.match(eff.note, /no known build tool was detected/);
+});
