@@ -3038,3 +3038,108 @@ test('trace-build: preserves the repo subset declared via trace-repos', () => {
   const after = run(['trace-repos', '--feature', 'demo'], dir);
   assert.deepEqual(after.data.repos, ['svc-b'], 'declared repo subset survives trace-build');
 });
+
+// ---------------------------------------------------------------------------
+// Mixed-toolchain hub: Gradle services + one Maven gateway
+// ---------------------------------------------------------------------------
+
+/** Executable launcher stub that echoes its args and exits 0 (hermetic build tool). */
+function writeLauncher(dir, name) {
+  const p = path.join(dir, name);
+  fs.writeFileSync(p, '#!/bin/sh\necho "RAN $0 $@"\nexit 0\n');
+  fs.chmodSync(p, 0o755);
+}
+
+/** hub/ + a Gradle service + a Maven gateway, each with a working launcher stub. */
+function mixedHub(prefix) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const hub = path.join(root, 'hub');
+  fs.mkdirSync(hub, { recursive: true });
+  const gsvc = path.join(root, 'wallet-ms');
+  const msvc = path.join(root, 'eid-gateway');
+  fs.mkdirSync(path.join(gsvc, 'src'), { recursive: true });
+  fs.mkdirSync(path.join(msvc, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(gsvc, 'build.gradle'), '');
+  writeLauncher(gsvc, 'gradlew');
+  fs.writeFileSync(path.join(msvc, 'pom.xml'), '<project/>');
+  writeLauncher(msvc, 'mvnw');
+  // doctor's repo checks require a real git working tree before it looks at build fit.
+  for (const d of [gsvc, msvc]) {
+    execFileSync('git', ['init', '-q'], { cwd: d });
+    execFileSync('git', ['config', 'user.email', 't@t.co'], { cwd: d });
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: d });
+    execFileSync('git', ['commit', '-q', '--allow-empty', '-m', 'init'], { cwd: d });
+  }
+  run(['init-project', '--stack', 'java-spring', '--repos', 'wallet-ms=../wallet-ms,eid-gateway=../eid-gateway'], hub);
+  const cfgPath = path.join(hub, '.spec-flow', 'config.json');
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  cfg.verify.testCommand = './gradlew test';
+  cfg.verify.coverageThreshold = null;
+  cfg.verify.coverageCommand = null;
+  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+  return { root, hub, gsvc, msvc, cfgPath };
+}
+
+test('verify-code: a Maven repo in a Gradle hub is auto-resolved instead of failing on a missing gradlew', () => {
+  // Pre-fix: config.verify.testCommand "./gradlew test" ran in eid-gateway too →
+  // "No such file" → the gate failed for a reason that had nothing to do with the code.
+  const { hub } = mixedHub('sf-mixed-');
+  const r = run(['verify-code'], hub);
+  assert.equal(r.ok, true);
+  const gTests = r.data.checks.find((c) => c.name === '[wallet-ms] tests');
+  const mTests = r.data.checks.find((c) => c.name === '[eid-gateway] tests');
+  assert.equal(gTests.status, 'ok', 'gradle service unaffected');
+  assert.match(gTests.detail, /\.\/gradlew test/);
+  assert.equal(mTests.status, 'ok', 'maven gateway resolved to its own launcher');
+  assert.match(mTests.detail, /\.\/mvnw -q test/);
+  assert.match(mTests.detail, /auto-detected java-maven in eid-gateway/, 'never runs a different command silently');
+  assert.ok(Array.isArray(r.data.repoResolution) && r.data.repoResolution.length === 1,
+    'the swap is reported at the top level too');
+  assert.equal(r.data.gate, 'pass');
+});
+
+test('verify-code: per-repo override in config.repos beats both the project verify block and detection', () => {
+  const { hub, cfgPath } = mixedHub('sf-mixed-ovr-');
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  cfg.repos['eid-gateway'] = {
+    path: '../eid-gateway',
+    stack: 'java-maven',
+    verify: { testCommand: './mvnw -q verify' },
+  };
+  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+  const r = run(['verify-code'], hub);
+  const mTests = r.data.checks.find((c) => c.name === '[eid-gateway] tests');
+  assert.equal(mTests.status, 'ok');
+  assert.match(mTests.detail, /\.\/mvnw -q verify/, 'the explicit override ran');
+  assert.ok(!r.data.repoResolution, 'explicit config → nothing auto-detected');
+});
+
+test('verify-code: scoped test filter follows the ROOT stack (-Dtest= for Maven, --tests for Gradle)', () => {
+  // The filter flag is Gradle-only syntax; a Maven root scoped with --tests dies on
+  // an unknown option. Each root must build its filter from its own stack.
+  const { hub } = mixedHub('sf-mixed-scope-');
+  const files = [
+    'wallet-ms/src/test/java/com/w/WalletTest.java',
+    'eid-gateway/src/test/java/com/g/GatewayTest.java',
+  ].join(',');
+  const r = run(['verify-code', '--files', files], hub);
+  const gTests = r.data.checks.find((c) => c.name === '[wallet-ms] tests');
+  const mTests = r.data.checks.find((c) => c.name === '[eid-gateway] tests');
+  assert.match(gTests.detail, /--tests "com\.w\.WalletTest"/);
+  assert.match(mTests.detail, /-Dtest=com\.g\.GatewayTest/);
+  assert.ok(!/--tests/.test(mTests.detail), 'no Gradle syntax leaks into the Maven root');
+  assert.equal(r.data.testsScoped, true);
+});
+
+test('doctor: warns when a configured repo cannot run the project testCommand, with the pin to apply', () => {
+  const { hub } = mixedHub('sf-mixed-doctor-');
+  const r = run(['doctor'], hub);
+  assert.equal(r.ok, true);
+  const repoChecks = r.data.checks.filter((c) => c.name === 'repos');
+  const gw = repoChecks.find((c) => /eid-gateway/.test(c.detail));
+  assert.equal(gw.status, 'warn', 'a mixed-toolchain hub must not read as all-green');
+  assert.match(gw.fix, /"stack": "java-maven"/);
+  assert.match(gw.fix, /mvnw -q test/);
+  const wallet = repoChecks.find((c) => /wallet-ms/.test(c.detail));
+  assert.equal(wallet.status, 'ok', 'the matching repo stays green');
+});
