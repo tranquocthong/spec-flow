@@ -31,7 +31,17 @@ if [ -z "${SF_AUTH_CHILD:-}" ] && [ -f .spec-flow/config.json ] && command -v no
     try {
       const c = require(process.cwd() + "/.spec-flow/config.json");
       const r = (c && typeof c.repos === "object" && c.repos) || {};
-      for (const [n, p] of Object.entries(r)) if (n && p) console.log(n + "\t" + p);
+      // config.repos["x"] may be a plain path string OR (since 0.8.9) an object
+      // { path, stack, verify } that overrides the project-wide stack/verify for
+      // that root only. Concatenating the object form straight into a string
+      // (n + "\t" + p) stringified it as "[object Object]" — a path that never
+      // exists, so every object-form repo silently fell through the "does not
+      // exist" branch below and was skipped for auth detection, even though the
+      // entry is perfectly valid. Resolve to the actual path string first.
+      for (const [n, v] of Object.entries(r)) {
+        const p = (v && typeof v === "object") ? (v.path || v.root || n) : v;
+        if (n && p) console.log(n + "\t" + p);
+      }
     } catch (e) { /* unreadable config → single-repo path */ }
   ' 2>/dev/null)"
 

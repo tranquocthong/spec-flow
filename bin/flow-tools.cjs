@@ -414,8 +414,16 @@ const commands = {
 
     const added = [], changed = [], removed = [];
 
-    // Helper: normalize text for comparison
-    const norm = (s) => String(s || '').replace(/\s+/g, ' ').toLowerCase().trim();
+    // Helper: normalize text for comparison. `.normalize('NFC')` matters for a Vietnamese
+    // (or any diacritic-heavy) SRS: the SAME visible text can be encoded as precomposed
+    // characters (NFC, one codepoint per glyph) or decomposed ones (NFD, base letter +
+    // combining marks) depending on which editor/OS last touched the file — common when
+    // a snapshot copy and the working SRS pass through different tools. Two byte-different
+    // but visually-identical strings compared without normalizing read as a real edit:
+    // every affected row/bullet shows up as a phantom removed+added pair, so an SRS with
+    // no actual content change can round-trip against its own snapshot as dozens of
+    // "changes" — which is exactly what defeats the `emptyChangeset` wrong-input guard.
+    const norm = (s) => String(s || '').normalize('NFC').replace(/\s+/g, ' ').toLowerCase().trim();
 
     // Diff user stories (by id)
     const newUsMap = Object.fromEntries((newSrs.stories || []).map(s => [s.id, s]));
@@ -462,6 +470,15 @@ const commands = {
     diffTableRows(oldSrs.nfr, newSrs.nfr, 'nfr');
     diffTableRows(oldSrs.businessLogic, newSrs.businessLogic, 'bl');
     diffTableRows(oldSrs.stateTable, newSrs.stateTable, 'state');
+    // ID-prefixed FR-/TC-/NFR- tables (parseSrs's language-independent fallback harvest,
+    // used when the SRS has no keyword-headed table or user-story structure — exactly
+    // the shape genSd falls back to §5.1/§5.2/§13.2 from). These were never diffed here:
+    // a real edit to an FR row's requirement text, an error-code mapping, a validation
+    // limit, or a TC row read as 0 changes — srs-diff was blind to the one table shape
+    // this project's own SRS actually uses.
+    diffTableRows(oldSrs.frTable, newSrs.frTable, 'fr');
+    diffTableRows(oldSrs.tcTable, newSrs.tcTable, 'tc');
+    diffTableRows(oldSrs.nfrTable, newSrs.nfrTable, 'nfr');
 
     const changeset = { added, changed, removed };
     const counts = { added: added.length, changed: changed.length, removed: removed.length };
@@ -489,7 +506,8 @@ const commands = {
     // Diagnostics: how many anchor-diffable items each side actually had. old=0 AND
     // new=0 means the anchor diff never stood a chance — its 0/0/0 says nothing.
     const rowsOf = (t) => (t && t.rows) ? t.rows.length : 0;
-    const anchorCount = (s) => (s.stories || []).length + rowsOf(s.nfr) + rowsOf(s.businessLogic) + rowsOf(s.stateTable);
+    const anchorCount = (s) => (s.stories || []).length + rowsOf(s.nfr) + rowsOf(s.businessLogic) + rowsOf(s.stateTable)
+      + rowsOf(s.frTable) + rowsOf(s.tcTable) + rowsOf(s.nfrTable);
     const anchors = { old: anchorCount(oldSrs), new: anchorCount(newSrs) };
 
     // emptyChangeset is the resync wrong-input gate: only true when BOTH layers saw

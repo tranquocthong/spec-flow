@@ -1697,6 +1697,74 @@ test('trace-impact: accepts srs-diff output shape directly and harvests ids from
   assert.ok(r.data.impacted.tc.includes('TC-001'), 'transitive fr-tc walk still applies');
 });
 
+test('srs-diff: detects a content edit inside an ID-prefixed FR/NFR table row', () => {
+  // Pre-fix: diffTableRows() only ran against srs.nfr / srs.businessLogic / srs.stateTable
+  // (the keyword-headed tables). An SRS shaped as ID-prefixed `| FR-1 | ... |` / `| NFR-1 |
+  // ... |` tables (parseSrs's language-independent fallback — no user stories, no
+  // keyword-matched headings) was never diffed at all: editing an FR row's requirement
+  // text, an error-code mapping, or a validation limit read as 0/0/0, emptyChangeset:true.
+  const dir = tmpProject();
+  initProject(dir);
+  const srs = path.join(dir, '.spec-flow', 'srs', 'idtable.md');
+  fs.mkdirSync(path.dirname(srs), { recursive: true });
+  const body = (timeout, limit) => [
+    '# Feature: Outbox', '',
+    '## 5. Chuc nang', '',
+    '| Ma | Muc do | Mo ta |',
+    '| --- | --- | --- |',
+    `| FR-1 | MUST | timeout default is ${timeout} |`, '',
+    '## 6. Phi chuc nang', '',
+    '| NFR-1 | Category | Requirement |',
+    '| --- | --- | --- |',
+    `| NFR-1 | Perf | validation limit is ${limit} items per batch |`, '',
+  ].join('\n');
+  fs.writeFileSync(srs, body('30s', 100));
+  const snap = run(['srs-snapshot', '--srs', srs, '--feature', 'idtable'], dir);
+  assert.equal(snap.ok, true);
+
+  const same = run(['srs-diff', '--new', srs, '--feature', 'idtable'], dir);
+  assert.equal(same.data.emptyChangeset, true, 'unedited doc still round-trips clean');
+  assert.ok(same.data.anchors.old > 0, 'FR/NFR ID tables now count as diffable anchors');
+
+  fs.writeFileSync(srs, body('90s', 500));
+  const changed = run(['srs-diff', '--new', srs, '--feature', 'idtable'], dir);
+  assert.equal(changed.ok, true);
+  assert.equal(changed.data.emptyChangeset, false, 'a real FR/NFR content edit is no longer invisible');
+  assert.equal(changed.data.counts.changed, 2, 'both the FR row and the NFR row are flagged changed');
+  const kinds = changed.data.changeset.changed.map((e) => e.kind).sort();
+  assert.deepEqual(kinds, ['fr', 'nfr']);
+});
+
+test('srs-diff: an unchanged SRS round-trips clean across an NFC/NFD Unicode normalization mismatch', () => {
+  // Pre-fix: norm() only lowercased + collapsed whitespace, never Unicode-normalized.
+  // The SAME visible Vietnamese text encoded as precomposed (NFC) vs decomposed (NFD)
+  // combining characters — routine when a snapshot copy and the later working SRS pass
+  // through different editors/OSes — compared as different strings. Every affected
+  // bullet showed up as a phantom removed+added pair, and emptyChangeset flipped to
+  // false ("this IS a revision") for a document nobody had touched.
+  const dir = tmpProject();
+  initProject(dir);
+  const srs = path.join(dir, '.spec-flow', 'srs', 'unicode.md');
+  fs.mkdirSync(path.dirname(srs), { recursive: true });
+  const nfc = [
+    '# Feature: Vi Du', '',
+    '## 4. Truong hop bien',
+    '- Giới hạn xác thực khi hết phiên đăng nhập',
+    '- Xử lý lỗi khi kết nối mạng bị gián đoạn', '',
+  ].join('\n').normalize('NFC');
+  fs.writeFileSync(srs, nfc);
+  const snap = run(['srs-snapshot', '--srs', srs, '--feature', 'unicode'], dir);
+  assert.equal(snap.ok, true);
+
+  // Re-save with the identical text decomposed to NFD — no actual content change.
+  fs.writeFileSync(srs, nfc.normalize('NFD'));
+  const r = run(['srs-diff', '--new', srs, '--feature', 'unicode'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.emptyChangeset, true, 'an encoding-only difference is not a real revision');
+  assert.equal(r.data.proseCounts.added, 0);
+  assert.equal(r.data.proseCounts.removed, 0);
+});
+
 // ---------------------------------------------------------------------------
 // task-baseline — evidence-driven done for backfilled features (0.5.7)
 // ---------------------------------------------------------------------------
@@ -3142,4 +3210,26 @@ test('doctor: warns when a configured repo cannot run the project testCommand, w
   assert.match(gw.fix, /mvnw -q test/);
   const wallet = repoChecks.find((c) => /wallet-ms/.test(c.detail));
   assert.equal(wallet.status, 'ok', 'the matching repo stays green');
+});
+
+test('detect-auth.sh: classifies a config.repos OBJECT-form entry, not "[object Object]"', () => {
+  // Regression: the multi-repo branch built its repo list with `n + "\t" + p`,
+  // string-concatenating `p` straight from config.repos["x"]. That works for the
+  // plain-string form but the 0.8.9 object form ({ path, stack, verify }) stringifies
+  // to the literal text "[object Object]" — a path that never exists, so the entry
+  // silently fell into the "does not exist; skipped" branch and detection fell
+  // through to classifying the HUB (which has no service code) instead of the repo.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sf-auth-objrepo-'));
+  const hub = path.join(root, 'hub');
+  const svc = path.join(root, 'svc');
+  fs.mkdirSync(hub, { recursive: true });
+  fs.mkdirSync(path.join(svc, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(svc, 'package.json'), JSON.stringify({ name: 'svc', dependencies: { jsonwebtoken: '^9.0.0' } }));
+  fs.mkdirSync(path.join(hub, '.spec-flow'), { recursive: true });
+  fs.writeFileSync(path.join(hub, '.spec-flow', 'config.json'), JSON.stringify({
+    repos: { svc: { path: '../svc', stack: 'node', verify: { testCommand: 'npm test' } } },
+  }));
+  const script = path.join(__dirname, '..', 'skills', 'manual-test', 'scripts', 'detect-auth.sh');
+  const out = execFileSync(script, [hub], { encoding: 'utf8' });
+  assert.equal(out.trim(), 'jwt-basic', 'object-form repo is classified by its own package.json, not skipped');
 });
