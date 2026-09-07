@@ -105,6 +105,10 @@ Keep the marker for: a screen field with no clear API mapping, contradictory SRS
 
 Remove and fill: an error code whose trigger is stated in a BL rule; an architecture component listed in the SRS sequence diagram; an AC bullet that maps 1:1 to an FR row.
 
+**The gate counts the marker by an exact literal string, not by the concept.** `/sf:ingest` step 8 and `/sf:doctor --sd` both count occurrences of the bold form `**TODO:MANUAL-REVIEW**` — anything else (a code span `` `TODO:MANUAL-REVIEW` ``, italics, plain unstyled text, a rewording like "needs manual review") is invisible to the gate and reports a **false "0 unresolved" on an SD that is not actually ready**. When you keep or add a marker, write it in EXACTLY one of these two forms (never invent a third):
+- Its own paragraph: `> **TODO:MANUAL-REVIEW** — <what's ambiguous and why>`
+- Inside a table cell or list item (no leading `> `, which is meaningless mid-line): `**TODO:MANUAL-REVIEW** — <what's ambiguous and why>`
+
 ## Scale guidance
 - If the SD is large (many sections / >25 FRs), author SECTION-BY-SECTION to stay coherent and within context — do not try to produce everything in one pass.
 - If the feature looks epic-scale, PROPOSE splitting it into sub-features (each its own SD, linked via trace) in your summary, rather than silently producing a 2000-line doc.

@@ -267,6 +267,35 @@ test('countSdTodos: only the marker blockquote counts, not the prose that mentio
   assert.equal(core.countSdTodos(null), 0);
 });
 
+test('genSd: §12.2 placeholder row (FR/TC table SRS, no user stories) is still gated', () => {
+  // Regression: an SRS shaped as FR/TC/NFR tables (no user-story edges) leaves
+  // §12.2 error codes with nothing to harvest (ecN stays 0 regardless of the FR/NFR/TC
+  // tables being present — there is no error-code table fallback). The old code embedded
+  // the placeholder's TODO marker in the table row via `.replace(/^> /, '')`, which only
+  // strips the leading `> ` — but the *line* itself starts with `|`, so the old
+  // line-anchored SD_TODO_RE never matched it either way, silently ungating the row.
+  const srs = core.parseSrs([
+    '# Feature: Outbox',
+    '',
+    '## 5. Chuc nang',
+    '',
+    '| Ma | Muc do | Mo ta |',
+    '| --- | --- | --- |',
+    '| FR-1 | MUST | publish after commit |',
+    '',
+  ].join('\n'));
+  const { sd, stats } = core.genSd(srs, { feature: 'outbox' });
+  assert.equal(stats.fr, 1, 'FR table harvested normally');
+  assert.equal(stats.errorCodes, 0, 'no user-story edges to derive error codes from');
+
+  const ecRow = sd.split('\n').find((l) => l.startsWith('| ERR_GENERIC_001 |'));
+  assert.ok(ecRow, '§12.2 emits the generic-error placeholder row');
+  assert.ok(!ecRow.startsWith('>'), 'the row is a table line, not a blockquote');
+  assert.match(ecRow, /\*\*TODO:MANUAL-REVIEW\*\*/, 'the row still carries the bold marker');
+  assert.ok(stats.todoManualReview > 0 && core.countSdTodos(sd) === stats.todoManualReview);
+  assert.ok(core.countSdTodos(ecRow) > 0, '§12.2 placeholder row alone is counted as an unresolved marker');
+});
+
 test('genSd: epic-scale flag trips past the FR threshold', () => {
   const rows = Array.from({ length: 30 }, (_, i) => `| FR-${i + 1} | MUST | requirement ${i} |`);
   const srs = core.parseSrs(['# Feature: Big', '', '## Reqs', '', '| Ma | P | D |', '| --- | --- | --- |', ...rows, ''].join('\n'));
