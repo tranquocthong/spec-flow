@@ -64,6 +64,25 @@ def walk(node, where):
 
 walk(doc, "$")
 
+# Dict `expect:` on a SQL step (verify[] / setup[] / teardown[]) is NEVER asserted —
+# db-query.sh -t runs tuples-only (no column headers to map a dict key by name), so
+# checklist_lib/sql.py's check_scalar() treats a dict expect as purely descriptive
+# and always returns "no assertion" (see that module's own docstring). A multi-column
+# dict is the MOST NATURAL way to write it (it's exactly how expect.body works for an
+# HTTP assertion) — which makes it the one spelling that silently asserts NOTHING: a
+# real bug in that row prints green. Catch it before the run, not after a false pass.
+def walk_sql_expect(node, where):
+    if isinstance(node, dict):
+        if "sql" in node and isinstance(node.get("expect"), dict) and node.get("expect"):
+            issues.append(f"{where}.expect: a dict expect on a SQL step is never asserted (db-query.sh -t has no column headers to match keys by) — split into one scalar `verify:` row per column (`expect: \"col = value\"`), or assert via the HTTP response's json_path instead.")
+        for k, v in node.items():
+            walk_sql_expect(v, f"{where}.{k}")
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            walk_sql_expect(v, f"{where}[{i}]")
+
+walk_sql_expect(doc, "$")
+
 # Undeclared db_ref / base_url_ref. Both fail the run anyway, but a typo'd ref that
 # only surfaces once the suite is half-executed wastes a full manual-test cycle.
 _cfg = doc.get("config") or {}

@@ -5,6 +5,7 @@
     "state": ["trạng thái"],
     "userstories": ["yêu cầu của người dùng"],
     "nfr": ["phi chức năng"],
+    "errorMessages": ["thông báo lỗi", "mã lỗi", "cảnh báo"],
     "detail": ["yêu cầu chi tiết", "logic nghiệp vụ", "yêu cầu cụ thể"],
     "frontend": ["giao diện", "màn hình"],
     "summary": ["tổng quan"]

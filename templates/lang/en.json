@@ -5,6 +5,7 @@
     "state": ["state machine"],
     "userstories": ["user stor"],
     "nfr": ["non-functional"],
+    "errorMessages": ["error & notification", "error and notification", "error message", "notification message"],
     "detail": ["functional requirement"],
     "frontend": ["frontend", "wireframe"],
     "summary": ["summary"]

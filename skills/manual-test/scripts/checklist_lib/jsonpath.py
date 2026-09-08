@@ -76,6 +76,10 @@ def cmp(a, op, b):
         return a == b or (_num(a) is not None and _num(a) == _num(b))
     if op == "!=":
         return not cmp(a, "==", b)
+    if op == "contains":
+        return str(b) in str(a)
+    if op == "not contains":
+        return str(b) not in str(a)
     na, nb = _num(a), _num(b)
     if na is not None and nb is not None:
         a, b = na, nb

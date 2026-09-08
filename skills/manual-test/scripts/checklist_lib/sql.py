@@ -15,6 +15,10 @@ import time
 from . import jsonpath
 
 _OP_RE = re.compile(r"^(>=|<=|!=|>|<|=)\s*(.+)$")
+# Word operators need a MANDATORY separating space (unlike `>0`/`=5`, "containsX" is
+# ambiguous with a literal string that happens to start with the word "contains") and
+# their own regex so `\b` word-boundary applies cleanly.
+_WORD_OP_RE = re.compile(r"^(not contains|contains)\b\s+(.+)$", re.IGNORECASE)
 
 
 _DB_FLAGS = (("database", "-d"), ("host", "--host"), ("port", "--port"),
@@ -76,6 +80,16 @@ def check_scalar(result, exp, varstore):
     if exp is None or isinstance(exp, dict):
         return None, ""
     s = str(varstore.expand(str(exp))).strip()
+    # `contains`/`not contains` — substring match, e.g. an EXPLAIN plan's multi-line
+    # output for an index name. Checked BEFORE the exact-string fallback: without this,
+    # `expect: "contains idx_foo"` silently compared the WHOLE multi-line result against
+    # the literal string "contains idx_foo" — never equal, so the assertion always
+    # failed regardless of whether the index was actually there, misreporting a real
+    # index as missing.
+    mw = _WORD_OP_RE.match(s)
+    if mw:
+        op, rhs = mw.group(1).lower(), mw.group(2).strip()
+        return jsonpath.cmp(result, op, rhs), f"'{result}' {op} '{rhs}'"
     m = _OP_RE.match(s)
     if m:
         op, rhs = m.group(1), m.group(2).strip()

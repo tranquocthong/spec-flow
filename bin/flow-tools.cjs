@@ -52,8 +52,17 @@ const commands = {
     const fromContent = (fs.readFileSync(src, 'utf8').match(/Feature:\s*([^\n#]+)/i) || [])[1];
     const feature = args.feature || slugify(fromContent || path.basename(src, path.extname(src)));
     const warnings = [];
-    if (!args.feature && !fromContent && /^\d{4}-\d{2}-\d{2}-/.test(feature)) {
-      warnings.push(`slug "${feature}" looks date-prefixed (derived from filename). Move SRS to .spec-flow/srs/<clean-name>.md or pass --feature <slug>.`);
+    // A slug derived from the SRS FILENAME (no `Feature:` line, no explicit --feature)
+    // is a guess, not a stated intent — it silently adopts whatever the file happened
+    // to be named/downloaded as, which can drift from this project's feature-slug
+    // convention (e.g. a file named "phase-3-agentgw-client.md" producing that exact
+    // slug when the project's convention is "<service>-p<phase>-*"). The old check
+    // only warned on a date-prefixed filename ("2026-01-01-..."); any OTHER filename
+    // shape was adopted with zero signal. Warn on every filename-derived slug —
+    // cheap, and the one case it's wrong to warn on (the filename IS the intended
+    // slug) costs nothing to dismiss.
+    if (!args.feature && !fromContent) {
+      warnings.push(`slug "${feature}" was derived from the SRS filename (no "Feature:" line found, no --feature passed) — check it matches this project's feature-slug convention before it propagates into SD/checklist paths, trace.json, and branch names. Add a "Feature: <name>" line to the SRS, or pass --feature <slug> explicitly.`);
     }
     const existing = fs.readdirSync(PATHS.snapshots).filter(f => f.startsWith(feature + '-')).length;
     // Zero-pad version so files sort in order (login-002.md before login-010.md).
@@ -130,6 +139,28 @@ const commands = {
     const httpSurface = designType === 'api' || designType === 'hybrid' || hasApiSection;
     const q = (s) => '"' + String(s || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
 
+    // Persistence → whether to scaffold config.db/config.redis + cleanup at all. The
+    // template's own convention (sd-template.md §7) is "no DB change → delete §7
+    // entirely", so no §7 heading is a real, common "no persistence" signal, not a
+    // missing section to warn about. When §7 IS present, it can still explicitly say
+    // there is none (a library/pure-transform/internal feature with no schema change) —
+    // scaffolding db/redis/cleanup regardless meant EVERY checklist got Postgres +
+    // Redis config blocks and a DELETE-rows cleanup stub even when SD §7 said plainly
+    // there's no database or cache, busywork the fill-in step then has to notice and
+    // strip by hand.
+    const stripDiacritics = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const dbHeadingMatch = sdText.match(/^##\s*7\.?\s+.+$/m);
+    let hasPersistence = !!dbHeadingMatch;
+    if (hasPersistence) {
+      const afterHeading = sdText.slice(sdText.indexOf(dbHeadingMatch[0]) + dbHeadingMatch[0].length);
+      const nextH2 = afterHeading.search(/^##\s+\S/m);
+      const body = stripDiacritics(nextH2 >= 0 ? afterHeading.slice(0, nextH2) : afterHeading).toLowerCase();
+      const noPersistence = /\bn\/a\b|not applicable|stateless|no persistence/.test(body)
+        || /\bno\b[^.\n]{0,40}\b(database|db|persistence|cache)\b/.test(body)
+        || /\bkhong\b[^.\n]{0,40}\b(database|db|co so du lieu|cache)\b/.test(body);
+      if (noPersistence) hasPersistence = false;
+    }
+
     // Auth scaffold. `X-Userinfo` (the `payload:` token form) is a Summer/APISIX-SPECIFIC
     // convention — it is NOT a safe default. `Authorization: Bearer <token>` is what
     // everything else on the wire uses, so ONLY an explicitly-detected `summer` project
@@ -141,14 +172,71 @@ const commands = {
     // Reuse detect-auth.sh (same heuristic the manual-test skill uses for reference-doc
     // routing) rather than re-deriving it here.
     // --auth overrides detection; any detection failure falls back to 'unknown'.
+    const genWarnings = [];
     let authType = String(args.auth || '').trim().toLowerCase();
     if (!authType) {
+      // Multi-repo hub: detect-auth.sh's own hub-reconciliation classifies EVERY
+      // repo in config.repos and majority-votes across them — a feature scoped to
+      // ONE repo (declared via trace-repos, or inferred from its file-links) gets
+      // whichever classification wins hub-wide, not its own repo's. A feature
+      // touching only a no-auth/HMAC-internal repo in a hub of 10 Summer/APISIX
+      // services got the Summer X-Userinfo scaffold and 401'd every generated
+      // test. Resolve the feature's own repo scope first (same --repos >
+      // trace.json.repos > file-links precedence verify-code uses) and run
+      // detect-auth.sh directly on that ONE repo when it resolves unambiguously;
+      // otherwise fall back to the hub-wide scan (ambiguous / single-repo / no
+      // feature context — unchanged prior behavior).
+      let authRoot = process.cwd();
+      try {
+        const cfg = readJsonSafe(PATHS.config, {});
+        const roots = resolveRepos(cfg);
+        if (roots.length > 1 && roots.some(r => r.name)) {
+          let scoped = null;
+          let scopeVia = null;
+          const explicitRepos = (typeof args.repos === 'string' && args.repos.trim())
+            ? new Set(args.repos.split(',').map(s => s.trim()).filter(Boolean)) : null;
+          if (explicitRepos) { scoped = explicitRepos; scopeVia = '--repos'; }
+          if (!scoped && feature) {
+            const tr = readTrace(feature);
+            if (tr && Array.isArray(tr.repos) && tr.repos.length) { scoped = new Set(tr.repos); scopeVia = `feature ${feature} (declared)`; }
+          }
+          if (!scoped && feature) {
+            const flPath = fileLinksPathFor(feature);
+            if (fs.existsSync(flPath)) {
+              const names = new Set(roots.map(r => r.name).filter(Boolean));
+              const seen = new Set(((readJsonSafe(flPath, { links: [] }).links) || [])
+                .map(l => String(l.file || '').split('/')[0]).filter(seg => names.has(seg)));
+              if (seen.size) { scoped = seen; scopeVia = `feature ${feature} (file-links)`; }
+            }
+          }
+          if (scoped && scoped.size === 1) {
+            const rp = roots.find(r => scoped.has(r.name));
+            if (rp) {
+              authRoot = rp.root;
+              genWarnings.push(`auth detection scoped to repo "${rp.name}" via ${scopeVia} (hub has ${roots.length} repos) — pass --auth <type> to override.`);
+            }
+          } else if (!scoped) {
+            genWarnings.push(`auth detection scanned all ${roots.length} config.repos (no --repos, no declared/inferred repo scope for "${feature}") — this can pick the WRONG classification for a feature scoped to one repo. Declare it with \`trace-repos --feature ${feature} --set <repo>\`, or pass --auth <type> explicitly.`);
+          }
+        }
+      } catch (e) { /* scoping is best-effort; fall through to hub-wide detection at cwd */ }
       try {
         const { execFileSync } = require('child_process');
+        // detect-auth.sh prints rich diagnostics (stack detected, quick-probe hints,
+        // "grep for the header here") to ITS OWN stderr by design — useful for a human
+        // running it directly. execFileSync's default stdio INHERITS the child's
+        // stderr straight into this process's own stderr, so those lines came out on
+        // fd 2 right before this command's one-line JSON on fd 1. The engine's own
+        // contract ("NEVER prints partial output... a single JSON Result on stdout")
+        // held on stdout alone, but any caller that merges the two streams (2>&1, a
+        // tool wrapper that captures combined output) saw the diagnostic prose land
+        // BEFORE the JSON and failed to parse it — even though the command had
+        // already succeeded and written the checklist file. Capture and discard
+        // detect-auth.sh's stderr explicitly instead of inheriting it.
         authType = execFileSync(
           path.join(PLUGIN_ROOT, 'skills', 'manual-test', 'scripts', 'detect-auth.sh'),
-          [process.cwd()],
-          { encoding: 'utf8', timeout: 5000 }
+          [authRoot],
+          { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }
         ).trim();
       } catch (e) {
         authType = 'unknown';
@@ -192,15 +280,21 @@ const commands = {
     // and expand ${VAR} only afterwards. Quoting keeps the var literal for that pass.
     L.push('config:');
     L.push('  base_url: "http://localhost:${SERVER_PORT:-8080}"');
-    L.push('  db:');
-    L.push('    host: localhost');
-    L.push('    port: 5432');
-    L.push('    database: "${DB_NAME}"');
-    L.push('    username: "${DB_USER:-postgres}"');
-    L.push('    password: "${DB_PASS:-postgres}"');
-    L.push('  redis:');
-    L.push('    host: localhost');
-    L.push('    port: 6379');
+    if (hasPersistence) {
+      L.push('  db:');
+      L.push('    host: localhost');
+      L.push('    port: 5432');
+      L.push('    database: "${DB_NAME}"');
+      L.push('    username: "${DB_USER:-postgres}"');
+      L.push('    password: "${DB_PASS:-postgres}"');
+      L.push('  redis:');
+      L.push('    host: localhost');
+      L.push('    port: 6379');
+    } else {
+      genWarnings.push(dbHeadingMatch
+        ? 'SD §7 declares no database/cache — skipped config.db/redis and the cleanup block.'
+        : 'SD has no §7 Database Design section — skipped config.db/redis and the cleanup block (per the template convention: delete §7 entirely when there is no DB change). Pass --sd with a §7 section if this feature DOES have persistence.');
+    }
     L.push('tokens:');
     L.push('  user_token:');
     if (isSummer) {
@@ -212,8 +306,10 @@ const commands = {
         L.push('    # Summer/APISIX project instead? replace with: payload: \'{"iat":...,"exp":...,"sub":"${USER_ID}"}\'  (sent as X-Userinfo)');
       }
     }
-    L.push('cleanup:');
-    L.push("  all: | # TODO: DELETE test rows (LIKE 'TEST-%')");
+    if (hasPersistence) {
+      L.push('cleanup:');
+      L.push("  all: | # TODO: DELETE test rows (LIKE 'TEST-%')");
+    }
     L.push('suites:');
     let s = 0;
     for (const flow of Object.keys(byFlow)) {
@@ -263,16 +359,32 @@ const commands = {
         }
       }
     }
+    // Suite granularity: suites are grouped by the §13.2 "Flow" column verbatim — if
+    // every TC row carries its own distinct Flow value (no shared user-story/flow
+    // label), grouping degenerates to one test per suite. That is silently a TRAP,
+    // not just noisy: a single-test suite's lone test is always tagged `smoke` (the
+    // "first non-edge TC is smoke, the rest are regression" rule needs ≥2 tests to
+    // ever produce a `regression` tag) — so `--tag regression` skips it entirely and
+    // silently, with no error, no "0 tests matched" — it just reports fewer PASS/FAIL
+    // than TCs exist.
+    const flowKeys = Object.keys(byFlow);
+    const singletonSuites = flowKeys.filter(k => byFlow[k].length === 1).length;
+    if (flowKeys.length > 1 && singletonSuites === flowKeys.length) {
+      genWarnings.push(`all ${flowKeys.length} suites are single-test (every TC row in SD §13.2 has a distinct "Flow" value) — every suite's lone test is tagged smoke and NONE are regression, so \`--tag regression\` silently skips all ${tc.rows.length} tests. If these TCs share a user story/flow, give them the same Flow label in the SD so they group into one suite with a real smoke/regression split.`);
+    } else if (flowKeys.length > 3 && singletonSuites > flowKeys.length / 2) {
+      genWarnings.push(`${singletonSuites}/${flowKeys.length} suites are single-test — check that SD §13.2's Flow column groups related test cases under one shared label; a single-test suite's only test is always tagged smoke, never regression.`);
+    }
+
     const yaml = L.join('\n') + '\n';
     const outPath = args.out || path.join(PATHS.specs, feature, 'CHECKLIST.yaml');
     const todoCount = (yaml.match(/TODO/g) || []).length;
-    if (args['dry-run']) return ok({ feature, suites: s, tests: tc.rows.length, todo: todoCount, preview: yaml.slice(0, 900) + '\n...[truncated]' });
+    if (args['dry-run']) return ok({ feature, suites: s, tests: tc.rows.length, todo: todoCount, warnings: genWarnings, preview: yaml.slice(0, 900) + '\n...[truncated]' });
     if (!args.force && fs.existsSync(outPath)) {
       return err(`CHECKLIST_EXISTS: ${outPath} already exists — pass --force to regenerate (destructive: overwrites filled assertions). Use \`/sf:manual-test ${feature}\` to run the existing checklist.`);
     }
     ensureDir(path.dirname(outPath));
     try { fs.writeFileSync(outPath, yaml); } catch (e) { return err(`WRITE_FAILED: ${e.message}`); }
-    return ok({ feature, checklist: outPath, suites: s, tests: tc.rows.length, todo: todoCount });
+    return ok({ feature, checklist: outPath, suites: s, tests: tc.rows.length, todo: todoCount, warnings: genWarnings });
   },
 
   // -----------------------------------------------------------------------

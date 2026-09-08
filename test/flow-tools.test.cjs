@@ -192,9 +192,9 @@ test('REGRESSION trace-build: an escaped `\\|` in a cell keeps the trace intact'
     '',
     '## 13.2 Test Cases',
     '',
-    '| TC ID | Flow | Test Case | Expected |',
-    '| --- | --- | --- | --- |',
-    '| TC-001 | Sign | status is `pending\\|done` | Pass |',
+    '| TC ID | Flow | Test Case | Expected | FR |',
+    '| --- | --- | --- | --- | --- |',
+    '| TC-001 | Sign | status is `pending\\|done` | Pass | FR-001 |',
     '',
   ].join('\n'));
   const r = run(['trace-build', '--sd', path.join(sdDir, 'SD.md'), '--feature', 'demo'], dir);
@@ -405,6 +405,29 @@ test('REGRESSION P1 resync guard: srs-diff flags an empty changeset (wrong-input
   const changed = run(['srs-diff', '--new', srs, '--feature', 'demo'], dir);
   assert.equal(changed.ok, true);
   assert.equal(changed.data.emptyChangeset, false, 'a real BL addition is not an empty changeset');
+});
+
+test('REGRESSION srs-snapshot: warns on ANY filename-derived slug, not only a date-prefixed one', () => {
+  // Pre-fix: the warning only fired for a date-prefixed filename ("2026-01-01-...").
+  // A filename like "phase-3-agentgw-client.md" (no "Feature:" line, no --feature)
+  // silently adopted that exact slug with zero signal, even when it drifts from the
+  // project's own feature-slug convention.
+  const dir = tmpProject();
+  initProject(dir);
+  const srs = path.join(dir, 'phase-3-agentgw-client.md');
+  fs.writeFileSync(srs, '## 5. Business Logic\n\n| Business Logic | Note |\n| --- | --- |\n| BL-01 must do X | |\n');
+  const snap = run(['srs-snapshot', '--srs', srs], dir);
+  assert.equal(snap.ok, true);
+  assert.equal(snap.data.feature, 'phase-3-agentgw-client', 'slug derived from the filename');
+  assert.equal(snap.data.warnings.length, 1, 'a warning fires even without a date prefix');
+  assert.match(snap.data.warnings[0], /derived from the SRS filename/, 'names the actual cause');
+
+  // An explicit --feature suppresses it entirely (stated intent, not a guess).
+  const srs2 = path.join(dir, 'other.md');
+  fs.writeFileSync(srs2, '## 5. Business Logic\n\n| Business Logic | Note |\n| --- | --- |\n| BL-01 must do X | |\n');
+  const explicit = run(['srs-snapshot', '--srs', srs2, '--feature', 'my-clean-slug'], dir);
+  assert.equal(explicit.ok, true);
+  assert.deepEqual(explicit.data.warnings, [], 'an explicit --feature produces no warning');
 });
 
 test('REGRESSION branch-ensure: git repo with no commits → NO_COMMITS (not NOT_A_GIT_REPO)', () => {
@@ -934,7 +957,7 @@ test('verify-collect reads the runner JSON result line (human summary above it)'
     '  failed: 1',
     '{"passed":["TC-001"],"failed":[{"id":"TC-002","reason":"status 500"}]}',
   ].join('\n'));
-  const r = run(['verify-collect', '--results', results], dir);
+  const r = run(['verify-collect', '--results', results, '--feature', 'demo'], dir);
   assert.equal(r.ok, true);
   assert.equal(r.data.status, 'failed');
   assert.deepEqual(r.data.passed, ['TC-001']);
@@ -946,9 +969,53 @@ test('verify-collect errors clearly when there is no JSON result line', () => {
   const dir = tmpProject();
   const results = path.join(dir, 'out.txt');
   fs.writeFileSync(results, '── summary ──\n  passed: 0\n(no machine line)\n');
-  const r = run(['verify-collect', '--results', results], dir);
+  const r = run(['verify-collect', '--results', results, '--feature', 'demo'], dir);
   assert.equal(r.ok, false);
   assert.match(r.error, /NO_JSON_RESULTS/);
+});
+
+test('verify-collect requires --feature (writes are never inferred from the active-feature mirror)', () => {
+  const dir = tmpProject();
+  const results = path.join(dir, 'out.txt');
+  fs.writeFileSync(results, '{"passed":["TC-001"],"failed":[]}');
+  const r = run(['verify-collect', '--results', results], dir);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /MISSING_ARG.*--feature/);
+});
+
+test('REGRESSION verify-collect: actually WRITES VERIFICATION.md (was JSON-only, gate never opened)', () => {
+  // Pre-fix: verify-collect computed {status, passed, failed, truths} and returned
+  // them as JSON only — nothing ever landed on disk, even though commands/manual-test.md
+  // says "This writes VERIFICATION.md" and status-report / maintenance's
+  // verify-integrity / task-baseline all read that file to decide the feature is
+  // verified. A full pass reported status:"passed" while the feature stayed
+  // "not verified" forever and the ship gate never opened.
+  const dir = tmpProject();
+  initProject(dir);
+  const r = run(['verify-collect', '--feature', 'demo',
+    '--results', '{"passed":["TC-001","TC-002"],"failed":[{"id":"TC-003","reason":"status 500"}]}'], dir);
+  assert.equal(r.ok, true);
+  const outPath = path.join(dir, '.spec-flow', 'specs', 'demo', 'VERIFICATION.md');
+  assert.equal(path.resolve(dir, r.data.verification), outPath, 'result names the file it wrote');
+  assert.ok(fs.existsSync(outPath), 'VERIFICATION.md actually written to disk');
+  const md = fs.readFileSync(outPath, 'utf8');
+  assert.match(md, /^status:\s*failed/m, 'status line matches the failed TC');
+  assert.match(md, /^-\s*TC-001:\s*verified\b/m, 'passed TC recorded as verified (status-report / task-baseline contract)');
+  assert.match(md, /^-\s*TC-002:\s*verified\b/m);
+  assert.doesNotMatch(md, /TC-003:\s*verified\b/, 'the failed TC is NOT recorded as verified');
+  assert.match(md, /TC-003:\s*FAILED/, 'the failure is recorded with its reason');
+
+  // status-report picks it up.
+  const sr = run(['status-report', '--feature', 'demo'], dir);
+  assert.equal(sr.ok, true);
+  assert.equal(sr.data.verified, false, 'a failed run is NOT reported as verified');
+
+  // Inline JSON (matching commands/manual-test.md's own worked example) round-trips too.
+  const r2 = run(['verify-collect', '--feature', 'demo', '--results', '{"passed":["TC-001"],"failed":[]}'], dir);
+  assert.equal(r2.ok, true);
+  assert.equal(r2.data.status, 'passed');
+  const sr2 = run(['status-report', '--feature', 'demo'], dir);
+  assert.equal(sr2.data.verified, true, 'an all-pass run is reported verified');
 });
 
 // ---------------------------------------------------------------------------
@@ -1154,6 +1221,160 @@ test('checklist-gen: --auth summer keeps the payload: X-Userinfo scaffold with n
   assert.doesNotMatch(yaml, /detected auth:/, 'summer (the default assumption) gets no advisory comment');
 });
 
+test('REGRESSION checklist-gen: auth detection is scoped to the feature\'s declared repo, not the whole hub', () => {
+  // Pre-fix: detect-auth.sh's hub-reconciliation classified EVERY config.repos entry
+  // and majority-voted across them. A feature scoped to ONE no-auth repo in a hub
+  // that also has a JWT-signal repo got the JWT/summer scaffold hub-wide — 401ing
+  // every generated test. Declaring the repo via trace-repos must now scope
+  // detection to that repo alone.
+  const dir = tmpProject();
+  initProject(dir);
+  fs.mkdirSync(path.join(dir, 'svc-jwt', 'src'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'svc-jwt', 'package.json'), JSON.stringify({ name: 'svc-jwt', dependencies: { jsonwebtoken: '^9.0.0' } }));
+  fs.mkdirSync(path.join(dir, 'svc-plain'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'svc-plain', 'package.json'), JSON.stringify({ name: 'svc-plain' }));
+
+  const cfgPath = path.join(dir, '.spec-flow', 'config.json');
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  cfg.repos = { 'svc-jwt': 'svc-jwt', 'svc-plain': 'svc-plain' };
+  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+
+  // Sanity: unscoped (hub-wide) detection picks up the jwt signal.
+  const unscoped = execFileSync(
+    path.join(__dirname, '..', 'skills', 'manual-test', 'scripts', 'detect-auth.sh'), [dir], { encoding: 'utf8' },
+  ).trim();
+  assert.equal(unscoped, 'jwt-basic', 'sanity: hub-wide scan sees the jwt-signal repo');
+
+  const sdDir = path.join(dir, '.spec-flow', 'specs', 'demo');
+  fs.mkdirSync(sdDir, { recursive: true });
+  fs.writeFileSync(path.join(sdDir, 'SD.md'), [
+    '# SD: demo', '',
+    '## 5.1 Functional Requirements', '',
+    '| ID | Requirement | Priority | Source |',
+    '| --- | --- | --- | --- |',
+    '| FR-001 | Do the thing | Must | US-1 |', '',
+    '## 13.2 Test Cases', '',
+    '| TC ID | Flow | Test Case | Expected Result | FR |',
+    '| --- | --- | --- | --- | --- |',
+    '| TC-001 | Happy path | Do the thing | 200 OK | FR-001 |', '',
+  ].join('\n'));
+
+  const declare = run(['trace-repos', '--feature', 'demo', '--set', 'svc-plain'], dir);
+  assert.equal(declare.ok, true);
+
+  const r = run(['checklist-gen', '--sd', path.join(sdDir, 'SD.md'), '--feature', 'demo'], dir);
+  assert.equal(r.ok, true, 'checklist-gen ok');
+  const yaml = fs.readFileSync(path.join(sdDir, 'CHECKLIST.yaml'), 'utf8');
+  assert.match(yaml, /detected auth: unknown/, 'scoped to svc-plain (no JWT signal there) → unknown, not jwt-basic');
+  assert.ok(r.data.warnings.some((w) => /scoped to repo "svc-plain"/.test(w)), 'warning names the scoped repo');
+});
+
+test('REGRESSION checklist-gen: no SD §7 Database Design section → skips config.db/redis and cleanup', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  const sdDir = path.join(dir, '.spec-flow', 'specs', 'demo');
+  fs.mkdirSync(sdDir, { recursive: true });
+  fs.writeFileSync(path.join(sdDir, 'SD.md'), [
+    '# SD: demo', '',
+    '## 5.1 Functional Requirements', '',
+    '| ID | Requirement | Priority | Source |',
+    '| --- | --- | --- | --- |',
+    '| FR-001 | Validate signature | Must | BL-1 |', '',
+    '## 13.2 Test Cases', '',
+    '| TC ID | Flow | Test Case | Expected Result | FR |',
+    '| --- | --- | --- | --- | --- |',
+    '| TC-001 | Sign | Valid signature accepted | 200 OK | FR-001 |', '',
+  ].join('\n'));
+  const r = run(['checklist-gen', '--sd', path.join(sdDir, 'SD.md'), '--feature', 'demo'], dir);
+  assert.equal(r.ok, true);
+  const yaml = fs.readFileSync(path.join(sdDir, 'CHECKLIST.yaml'), 'utf8');
+  assert.doesNotMatch(yaml, /^\s*db:/m, 'no §7 → no db: block');
+  assert.doesNotMatch(yaml, /^\s*redis:/m, 'no §7 → no redis: block');
+  assert.doesNotMatch(yaml, /^cleanup:/m, 'no §7 → no cleanup: block');
+  assert.ok(r.data.warnings.some((w) => /no §7 Database Design section/.test(w)), 'warning explains why persistence config was skipped');
+});
+
+test('REGRESSION checklist-gen: SD §7 explicitly says no database → skips config.db/redis and cleanup', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  const sdDir = path.join(dir, '.spec-flow', 'specs', 'demo');
+  fs.mkdirSync(sdDir, { recursive: true });
+  fs.writeFileSync(path.join(sdDir, 'SD.md'), [
+    '# SD: demo', '',
+    '## 5.1 Functional Requirements', '',
+    '| ID | Requirement | Priority | Source |',
+    '| --- | --- | --- | --- |',
+    '| FR-001 | Validate signature | Must | BL-1 |', '',
+    '## 7. Database Design', '',
+    'N/A — this feature has no database or cache; all state is stateless HMAC validation.', '',
+    '## 13.2 Test Cases', '',
+    '| TC ID | Flow | Test Case | Expected Result | FR |',
+    '| --- | --- | --- | --- | --- |',
+    '| TC-001 | Sign | Valid signature accepted | 200 OK | FR-001 |', '',
+  ].join('\n'));
+  const r = run(['checklist-gen', '--sd', path.join(sdDir, 'SD.md'), '--feature', 'demo'], dir);
+  assert.equal(r.ok, true);
+  const yaml = fs.readFileSync(path.join(sdDir, 'CHECKLIST.yaml'), 'utf8');
+  assert.doesNotMatch(yaml, /^\s*db:/m, '§7 says no DB → no db: block');
+  assert.ok(r.data.warnings.some((w) => /declares no database\/cache/.test(w)));
+});
+
+test('REGRESSION checklist-gen: an SD §7 WITH a real database keeps db/redis/cleanup (no false-negative)', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  const sdDir = path.join(dir, '.spec-flow', 'specs', 'demo');
+  fs.mkdirSync(sdDir, { recursive: true });
+  fs.writeFileSync(path.join(sdDir, 'SD.md'), [
+    '# SD: demo', '',
+    '## 5.1 Functional Requirements', '',
+    '| ID | Requirement | Priority | Source |',
+    '| --- | --- | --- | --- |',
+    '| FR-001 | Persist order | Must | US-1 |', '',
+    '## 7. Database Design', '',
+    '### 7.2 Table Definitions',
+    'New `orders` table.', '',
+    '## 13.2 Test Cases', '',
+    '| TC ID | Flow | Test Case | Expected Result | FR |',
+    '| --- | --- | --- | --- | --- |',
+    '| TC-001 | Order | Order row persisted | 200 OK | FR-001 |', '',
+  ].join('\n'));
+  const r = run(['checklist-gen', '--sd', path.join(sdDir, 'SD.md'), '--feature', 'demo'], dir);
+  assert.equal(r.ok, true);
+  const yaml = fs.readFileSync(path.join(sdDir, 'CHECKLIST.yaml'), 'utf8');
+  assert.match(yaml, /^\s*db:/m, 'a real §7 section keeps the db: block');
+  assert.match(yaml, /^cleanup:/m, 'a real §7 section keeps the cleanup: block');
+});
+
+test('REGRESSION checklist-gen: warns when every suite is single-test (Flow column not grouping)', () => {
+  // Pre-fix: no signal at all when §13.2's Flow column happens to be unique per row
+  // (e.g. one Flow value per business-rule-derived TC) — grouping degenerates to
+  // one suite per test, and a single-test suite's lone test is ALWAYS tagged smoke
+  // (never regression), so `--tag regression` silently skips the whole checklist.
+  const dir = tmpProject();
+  initProject(dir);
+  const sdDir = path.join(dir, '.spec-flow', 'specs', 'demo');
+  fs.mkdirSync(sdDir, { recursive: true });
+  fs.writeFileSync(path.join(sdDir, 'SD.md'), [
+    '# SD: demo', '',
+    '## 5.1 Functional Requirements', '',
+    '| ID | Requirement | Priority | Source |',
+    '| --- | --- | --- | --- |',
+    '| FR-001 | Validate signature | Must | BL-1 |', '',
+    '## 13.2 Test Cases', '',
+    '| TC ID | Flow | Test Case | Expected Result | FR |',
+    '| --- | --- | --- | --- | --- |',
+    '| TC-001 | BL-1 valid | Valid signature accepted | 200 OK | FR-001 |',
+    '| TC-002 | BL-1 missing ts | Missing timestamp rejected | 422 | FR-001 |',
+    '| TC-003 | BL-1 expired ts | Expired timestamp rejected | 422 | FR-001 |', '',
+  ].join('\n'));
+  const r = run(['checklist-gen', '--sd', path.join(sdDir, 'SD.md'), '--feature', 'demo'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.suites, 3, 'each distinct Flow value became its own suite');
+  assert.ok(r.data.warnings.some((w) => /all 3 suites are single-test/.test(w)), 'the degenerate-grouping trap is surfaced');
+  const yaml = fs.readFileSync(path.join(sdDir, 'CHECKLIST.yaml'), 'utf8');
+  assert.doesNotMatch(yaml, /tags: \[smoke, regression\]/, 'no suite got a real smoke+regression split');
+});
+
 test('trace-impact: --ids FR-001 resolves transitively to linked TC', () => {
   // Build a trace first, then call trace-impact and assert the impacted set.
   const dir = tmpProject();
@@ -1286,6 +1507,39 @@ test('#2 sd-skeleton: harvests FR/NFR/TC tables by ID-prefix under non-English h
   assert.equal(r.data.stats.testCases, 1, 'TC row harvested by ID-prefix');
 });
 
+test('REGRESSION sd-skeleton: harvests §6.2 "Error & Notification Messages" table, not just story edge cases', () => {
+  // Pre-fix: §12.2 error-code harvest read ONLY per-story Edge Cases bullets —
+  // an SRS listing its error codes in the dedicated §6.2 table (the SRS template's
+  // own convention) harvested 0, even though the generated §12.2 fallback text
+  // itself says "derive from SRS §6.2" (it never actually read that section).
+  const dir = tmpProject();
+  initProject(dir);
+  const srs = path.join(dir, 'srs.md');
+  fs.writeFileSync(srs, [
+    'Feature: demo',
+    '',
+    '## 4. User Stories',
+    '',
+    '**US-1: As a client, I want to call the API, so that I get a result**',
+    '',
+    '#### Acceptance Criteria',
+    '- valid input returns 200',
+    '',
+    '## 6. Non-Functional Requirements',
+    '',
+    '### 6.2 Error & Notification Messages',
+    '',
+    '| Code / trigger | Message text | Channel | Audience |',
+    '| --- | --- | --- | --- |',
+    '| ERR_INVALID_INPUT | Invalid input, request rejected | API | Client |',
+    '| resource not found | The requested resource does not exist | API | Client |',
+    '',
+  ].join('\n'));
+  const r = run(['sd-skeleton', '--srs', srs, '--feature', 'demo', '--dry-run'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.stats.errorCodes, 2, '§6.2 table rows harvested (was 0 — only story edges were read)');
+});
+
 test('trace-build: warns on error codes violating conventions.errorCodePattern (enforcement)', () => {
   const dir = tmpProject();
   initProject(dir);
@@ -1315,6 +1569,58 @@ test('trace-build: warns on error codes violating conventions.errorCodePattern (
   assert.match(w, /errorCodePattern/, 'a pattern-violation warning is surfaced');
   assert.match(w, /ERR_WEBHOOK_PGMS_LOOKUP_002/, 'the stacked code is flagged');
   assert.ok(!/ERR_ORDER_001/.test(w), 'the conforming code is NOT flagged');
+});
+
+test('REGRESSION trace-build: warns when a numbered section exists but its table headers were translated (0 nodes, no signal pre-fix)', () => {
+  // Pre-fix: every table (§5.1/§13.2/§12.2/§10.4/§5.2) is located by CONTENT
+  // (English header keywords), not by its canonical section NUMBER. A table whose
+  // column headers drifted (translated, renamed) produced a null table and 0 nodes
+  // with zero warning — the SD reads complete, the trace silently drops that node kind.
+  const dir = tmpProject();
+  initProject(dir);
+  const sdDir = path.join(dir, '.spec-flow', 'specs', 'demo');
+  fs.mkdirSync(sdDir, { recursive: true });
+  fs.writeFileSync(path.join(sdDir, 'SD.md'), [
+    '# SD: demo', '',
+    '## 5.1 Functional Requirements', '',
+    '| ID | Requirement | Priority | Source |',
+    '| --- | --- | --- | --- |',
+    '| FR-001 | does X | Must Have | US-1 |', '',
+    '## 12.2 Error Codes', '',
+    '| Mã lỗi | HTTP | Điều kiện kích hoạt | Thông báo người dùng |',
+    '| --- | --- | --- | --- |',
+    '| ERR_A | 400 | bad input | invalid |', '',
+  ].join('\n'));
+  const r = run(['trace-build', '--sd', path.join(sdDir, 'SD.md'), '--feature', 'demo'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.counts.errors, 0, 'header-translated error table parses to 0 nodes');
+  const w = r.data.warnings.join(' ');
+  assert.match(w, /§12\.2 error table/, 'names the affected table');
+  assert.match(w, /Mã lỗi/, 'quotes the actual (mismatched) headers found');
+});
+
+test('REGRESSION trace-build: warns on FRs with no linked TC in §13.2 (orphan requirement)', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  const sdDir = path.join(dir, '.spec-flow', 'specs', 'demo');
+  fs.mkdirSync(sdDir, { recursive: true });
+  fs.writeFileSync(path.join(sdDir, 'SD.md'), [
+    '# SD: demo', '',
+    '## 5.1 Functional Requirements', '',
+    '| ID | Requirement | Priority | Source |',
+    '| --- | --- | --- | --- |',
+    '| FR-001 | Do the thing | Must | US-1 |',
+    '| FR-002 | Do another thing | Must | US-2 |', '',
+    '## 13.2 Test Cases (Critical)', '',
+    '| TC ID | Flow | Test Case | Expected |',
+    '| --- | --- | --- | --- |',
+    '| TC-001 | US-1 | Do the thing | Do the thing succeeds |', '',
+  ].join('\n'));
+  const r = run(['trace-build', '--sd', path.join(sdDir, 'SD.md'), '--feature', 'demo'], dir);
+  assert.equal(r.ok, true);
+  const w = r.data.warnings.join(' ');
+  assert.match(w, /FR-002/, 'the orphaned FR is named');
+  assert.ok(!/FR-001\b.*no linked TC|no linked TC.*FR-001/.test(w), 'the covered FR is NOT flagged');
 });
 
 test('#4 status-report: surfaces declared live gaps from VERIFICATION.md', () => {
@@ -3232,4 +3538,135 @@ test('detect-auth.sh: classifies a config.repos OBJECT-form entry, not "[object 
   const script = path.join(__dirname, '..', 'skills', 'manual-test', 'scripts', 'detect-auth.sh');
   const out = execFileSync(script, [hub], { encoding: 'utf8' });
   assert.equal(out.trim(), 'jwt-basic', 'object-form repo is classified by its own package.json, not skipped');
+});
+
+test('REGRESSION detect-auth.sh: a custom HMAC/signature scheme is "unknown", not "no-auth"', () => {
+  // Pre-fix: java-spring with no Spring Security dep and no Authorization: Bearer
+  // pattern fell straight to "no-auth" — a service that verifies an HMAC request
+  // signature (a real access-control check) got scaffolded as if it needed none.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sf-auth-hmac-'));
+  fs.mkdirSync(path.join(root, 'src', 'main', 'java'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'build.gradle'), [
+    "plugins { id 'org.springframework.boot' version '3.2.0' }",
+    'dependencies { implementation "org.springframework.boot:spring-boot-starter-web" }',
+  ].join('\n'));
+  fs.writeFileSync(path.join(root, 'src', 'main', 'java', 'SigFilter.java'), [
+    'public class SigFilter {',
+    '  void verify(String header) {',
+    '    javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");',
+    '  }',
+    '}',
+  ].join('\n'));
+  const script = path.join(__dirname, '..', 'skills', 'manual-test', 'scripts', 'detect-auth.sh');
+  const out = execFileSync(script, [root], { encoding: 'utf8' });
+  assert.equal(out.trim(), 'unknown', 'HMAC signature evidence prevents the false "no-auth" default');
+});
+
+test('REGRESSION lint-checklist.sh: flags a dict `expect:` on a SQL verify/setup/teardown step', () => {
+  // A dict expect on a SQL step is NEVER asserted (db-query.sh -t has no column
+  // headers) — checklist_lib.sql.check_scalar returns None (descriptive only), so
+  // a multi-column dict looked like the natural way to assert several columns but
+  // silently asserted nothing. Catch it before the run, not after a false pass.
+  const dir = tmpProject();
+  fs.writeFileSync(path.join(dir, 'CHECKLIST.yaml'), [
+    'config:',
+    '  base_url: "http://localhost:8080"',
+    'tokens:',
+    '  user_token:',
+    '    bearer: "${TOKEN}"',
+    'suites:',
+    '  - id: suite-1',
+    '    name: "Test"',
+    '    tags: [smoke]',
+    '    tests:',
+    '      - id: TC-001',
+    '        name: "Test row"',
+    '        tags: [smoke]',
+    '        request:',
+    '          method: GET',
+    '          path: /api/v1/x',
+    '          token: user_token',
+    '        expect:',
+    '          status: 200',
+    '        verify:',
+    '          - sql: "SELECT col1, col2 FROM t WHERE id = 1"',
+    '            expect:',
+    '              col1: 5',
+    '              col2: "y"',
+    '',
+  ].join('\n'));
+  const script = path.join(__dirname, '..', 'skills', 'manual-test', 'scripts', 'lint-checklist.sh');
+  let threw = null;
+  try {
+    execFileSync(script, [path.join(dir, 'CHECKLIST.yaml')], { encoding: 'utf8', stdio: 'pipe' });
+  } catch (e) {
+    threw = e;
+  }
+  assert.ok(threw, 'lint-checklist.sh exits non-zero on a dict expect over a SQL step');
+  assert.match(String(threw.stderr), /dict expect on a SQL step is never asserted/);
+});
+
+test('REGRESSION sd-skeleton: merges ALL FR-prefix tables, not just the first', () => {
+  // Pre-fix: `tableByIdPrefix` used tables.find() — an SRS whose FRs are split into
+  // several sub-tables (one per module, a common real shape) harvested only the
+  // FIRST table's rows and silently dropped the rest (26 FRs across 4 tables → 6).
+  const dir = tmpProject();
+  initProject(dir);
+  const srs = path.join(dir, 'srs.md');
+  fs.writeFileSync(srs, [
+    'Feature: multi-fr-demo',
+    '',
+    '## 5. Yeu cau chuc nang module A',
+    '',
+    '| Ma | Yeu cau | Muc do |',
+    '| --- | --- | --- |',
+    '| FR-1 | req A1 | Must |',
+    '| FR-2 | req A2 | Must |',
+    '',
+    '## 6. Yeu cau chuc nang module B',
+    '',
+    '| Ma | Yeu cau | Muc do |',
+    '| --- | --- | --- |',
+    '| FR-3 | req B1 | Must |',
+    '| FR-4 | req B2 | Must |',
+    '| FR-5 | req B3 | Must |',
+    '',
+  ].join('\n'));
+  const r = run(['sd-skeleton', '--srs', srs, '--feature', 'multi-fr-demo', '--dry-run'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.stats.fr, 5, 'all 5 FR rows across both sub-tables harvested (was 2 — first table only)');
+});
+
+test('REGRESSION checklist-gen: stdout is pure JSON even when the caller merges stderr (2>&1)', () => {
+  // Pre-fix: execFileSync's default stdio INHERITS the child's (detect-auth.sh)
+  // stderr straight into this process's own stderr. Any caller that merges stdout+
+  // stderr (2>&1, a tool wrapper capturing combined output) saw detect-auth.sh's
+  // diagnostic prose land BEFORE the JSON line and failed to parse it as JSON, even
+  // though the command had already succeeded and written the checklist file.
+  const dir = tmpProject();
+  initProject(dir);
+  const sdDir = path.join(dir, '.spec-flow', 'specs', 'demo');
+  fs.mkdirSync(sdDir, { recursive: true });
+  fs.writeFileSync(path.join(sdDir, 'SD.md'), [
+    '# SD: demo', '',
+    '## 5.1 Functional Requirements', '',
+    '| ID | Requirement | Priority | Source |',
+    '| --- | --- | --- | --- |',
+    '| FR-001 | Do the thing | Must | US-1 |', '',
+    '## 13.2 Test Cases', '',
+    '| TC ID | Flow | Test Case | Expected Result | FR |',
+    '| --- | --- | --- | --- | --- |',
+    '| TC-001 | Happy path | Do the thing | 200 OK | FR-001 |', '',
+  ].join('\n'));
+  const { execSync } = require('node:child_process');
+  // Actually merge stdout+stderr the way a naive caller (2>&1 / a wrapper that
+  // captures combined output) would — execFileSync alone never mixes the two.
+  const out = execSync(
+    `node ${JSON.stringify(ENGINE)} checklist-gen --sd ${JSON.stringify(path.join(sdDir, 'SD.md'))} --feature demo 2>&1`,
+    { cwd: dir, encoding: 'utf8' },
+  );
+  const lines = out.trim().split('\n').filter(Boolean);
+  assert.equal(lines.length, 1, 'exactly one line of output — no stray diagnostic prose');
+  const parsed = JSON.parse(lines[0]);
+  assert.equal(parsed.ok, true);
 });

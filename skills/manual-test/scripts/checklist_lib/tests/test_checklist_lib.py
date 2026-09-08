@@ -202,6 +202,23 @@ class TestSqlScalarVerify(unittest.TestCase):
         self.assertIsNone(sql.check_scalar("x", {"a": 1}, self.vs)[0])
         self.assertIsNone(sql.check_scalar("x", None, self.vs)[0])
 
+    def test_contains_operator(self):
+        # REGRESSION: pre-fix `expect: "contains idx_foo"` fell through to the
+        # exact-string fallback — the WHOLE (often multi-line) scalar result compared
+        # against the literal string "contains idx_foo", which is never equal, so an
+        # EXPLAIN-plan-contains-this-index assertion always failed regardless of
+        # whether the index was actually there.
+        plan = "Index Scan using idx_eid_log_created_at on eid_log\n  Index Cond: ..."
+        self.assertTrue(sql.check_scalar(plan, "contains idx_eid_log_created_at", self.vs)[0])
+        self.assertFalse(sql.check_scalar(plan, "contains idx_nonexistent", self.vs)[0])
+        self.assertTrue(sql.check_scalar(plan, "not contains idx_nonexistent", self.vs)[0])
+        self.assertFalse(sql.check_scalar(plan, "not contains idx_eid_log_created_at", self.vs)[0])
+
+    def test_contains_requires_a_separating_space(self):
+        # "containsX" must NOT be parsed as op=contains, rhs="X" — a literal expected
+        # string that happens to start with the word "contains" stays a literal.
+        self.assertTrue(sql.check_scalar("containsX", "containsX", self.vs)[0])
+
 
 class TestMultiDatabase(unittest.TestCase):
     """`db_ref:` is the DB-side twin of `base_url_ref:`. Without it a feature spanning
@@ -321,8 +338,16 @@ class TestSetupSqlGuard(unittest.TestCase):
         self.assertIsNone(err)
 
     def test_teardown_guard_warns_instead_of_aborting(self):
-        err, _ = self._run({"sql": "SELECT status", "expect": "GONE"}, "STILL_THERE", warn_only=True)
-        self.assertIsNone(err)
+        warnings, _ = self._run({"sql": "SELECT status", "expect": "GONE"}, "STILL_THERE", warn_only=True)
+        # warn_only never aborts — but the failure must not vanish either: it comes
+        # back as a warning string so the caller can surface it (JSON result /
+        # VERIFICATION.md), instead of only being printed to console and lost.
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("setup sql guard failed", warnings[0])
+
+    def test_teardown_no_failure_returns_empty_warnings(self):
+        warnings, _ = self._run({"sql": "SELECT status", "expect": "GONE"}, "GONE", warn_only=True)
+        self.assertEqual(warnings, [])
 
 
 class TestExecSetupStep(unittest.TestCase):
