@@ -2,7 +2,7 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
-## [0.8.11] — 2026-09-08
+## [0.9.0] — 2026-09-08
 
 **Nineteen rough edges from one real dogfooding session (an eid-gateway feature and a 26-FR/47-TC phase), grouped by what they actually cost.** Group 1 is false-green / lost-evidence: a command reports success, or asserts nothing, while the thing it claims to check never happened. Group 2 is noise that wastes time without corrupting the result. Both groups share one theme this release keeps hitting: an engine that silently drops the SECOND (or third, or fourth) matching thing — a table, a repo, an FR, a stderr stream — instead of merging or naming what it dropped.
 
