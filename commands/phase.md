@@ -68,6 +68,20 @@ trap "node ${CLAUDE_PLUGIN_ROOT}/bin/task-master models --set-main '<previous>' 
 node ${CLAUDE_PLUGIN_ROOT}/bin/task-master parse-prd --input .spec-flow/specs/<feature>/SD.md --tag <feature>
 ```
 
+**Phase 1 only — exit 0 here does NOT mean tasks are seeded.** Default `taskCore.aiMode`
+is `agent-native`: this prints a `GenerationSpec` JSON object to stdout and exits 0
+without calling an LLM (zero-network by design — see `docs/agent-native-two-phase.md`).
+Treat the printed JSON as a handoff to YOU:
+1. Parse it — `operation`, `tag`, `inputContent` (the SD), `taskSchema`, `instructions`.
+2. Generate the `Task[]` array yourself per `instructions` + `taskSchema` (you are Phase 2).
+3. Write it to a temp file and run Phase 3 to actually persist it:
+   ```bash
+   node ${CLAUDE_PLUGIN_ROOT}/bin/task-master tasks-import --tag <feature> --file <path-to-generated-tasks.json>
+   ```
+   `{"imported": N}` from THAT command is the real seeding signal — not the Phase 1 exit
+   code. `use-tag` on a still-empty tag succeeds silently, so confirm with `task-list
+   --tag <feature>` before assuming seeding worked and moving on.
+
 `analyze-complexity` (role `research`):
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/bin/task-master models --set-research "<configured>" --claude-code
@@ -112,6 +126,10 @@ Returns per-FR complexity scores (1–10):
   trap "node ${CLAUDE_PLUGIN_ROOT}/bin/task-master models --set-main '<previous>' --claude-code" EXIT
   node ${CLAUDE_PLUGIN_ROOT}/bin/task-master expand --id=<id>
   ```
+  Same two-phase handoff as `parse-prd` above: this prints a `GenerationSpec` (Phase 1)
+  and exits 0 without creating subtasks. Generate the subtask `Task[]` yourself from it
+  (Phase 2), then `tasks-import --tag <feature> --file <path>` (Phase 3) to actually add
+  them — check `{"imported": N}`, not this command's exit code.
   Then run each subtask as fast.
 - **8-10 → deep**: if the task touches an external integration, run the research AI op first (pass the SD §14 risk row as context) with the override (role `research`) — read the JSON from `taskmaster-model-plan --role research`; if `needsChange: true`, substitute `configured`/`previous` as literal values below (else run the AI op directly):
   ```bash

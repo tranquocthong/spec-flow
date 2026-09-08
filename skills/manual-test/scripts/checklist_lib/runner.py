@@ -183,6 +183,11 @@ def main(argv=None):
 
     total = passed = failed = skipped = 0
     results = []  # per-test outcome for --json: {"id", "ok", "reason"}
+    teardown_warnings = []  # [{"id", "warning"}] — a failed teardown step never fails the
+                             # test itself (by design: recovery ran AFTER the result was
+                             # already recorded), but it must not vanish either — it's
+                             # surfaced separately so it can't be mistaken for the next
+                             # test's own unrelated failure.
 
     for suite in doc.get("suites", []) or []:
         print(f"{BOLD}── suite: {suite.get('id', '?')} ──{RESET}")
@@ -264,7 +269,9 @@ def main(argv=None):
                 passed += 1
                 results.append({"id": tid, "ok": True})
 
-            setup.run_steps(test.get("teardown", []), ctx, warn_only=True)
+            tw = setup.run_steps(test.get("teardown", []), ctx, warn_only=True)
+            for w in tw or []:
+                teardown_warnings.append({"id": tid, "warning": w})
 
     # Global cleanup (after all suites). `cleanup.db_ref` targets one alternate
     # database; a multi-service run that seeds rows in both needs a `teardown:` step
@@ -284,11 +291,16 @@ def main(argv=None):
     print(f"  {GREEN}passed:  {passed}{RESET}")
     print(f"  {RED}failed:  {failed}{RESET}")
     print(f"  skipped: {skipped}")
+    if teardown_warnings:
+        print(f"  {YELLOW}teardown warnings: {len(teardown_warnings)}{RESET} (recovery/cleanup step failed after the test's own result was recorded — state may be dirty for later tests)")
+        for tw in teardown_warnings:
+            print(f"    {YELLOW}- {tw['id']}: {tw['warning']}{RESET}")
     if args.json:
         # Final machine-readable line for `flow-tools verify-collect`. The human
         # summary above stays for the console; verify-collect reads this last line.
         print(json.dumps({
             "passed": [r["id"] for r in results if r["ok"]],
             "failed": [{"id": r["id"], "reason": r.get("reason", "FAIL")} for r in results if not r["ok"]],
+            "teardownWarnings": teardown_warnings,
         }))
     return 0 if failed == 0 else 1

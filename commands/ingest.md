@@ -112,6 +112,25 @@ With a file path given, skip Mode 0 and go straight to the Steps.
    node ${CLAUDE_PLUGIN_ROOT}/bin/task-master parse-prd --input .spec-flow/specs/<feature>/SD.md --tag <feature>
    ```
 
+   **This is Phase 1 only — exit 0 here does NOT mean tasks are seeded.** The default
+   `taskCore.aiMode` is `agent-native`: the command above prints a `GenerationSpec` JSON
+   object to stdout and exits 0 — it does not call an LLM itself (zero-network by design;
+   see `docs/agent-native-two-phase.md`). Treat that stdout as a handoff to YOU, not as a
+   completed result:
+   1. Parse the printed JSON. It has `operation`, `tag`, `inputContent` (the SD content),
+      `taskSchema`, `expectedOutput`, `instructions`, `context`.
+   2. Generate the `Task[]` array yourself, following `instructions` + `taskSchema` against
+      `inputContent` — this is Phase 2, and you (the agent) are the LLM it's deferring to.
+   3. Write that array to a temp JSON file, then run Phase 3 to actually persist it:
+      ```bash
+      node ${CLAUDE_PLUGIN_ROOT}/bin/task-master tasks-import --tag <feature> --file <path-to-generated-tasks.json>
+      ```
+      `tasks-import` prints `{"imported": N}` on success — THAT is the real seeding signal,
+      not the Phase 1 exit code. Confirm with
+      `node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs task-list --tag <feature>` (or
+      `status-report --feature <feature>`) before assuming tasks exist —
+      running `use-tag` on an empty tag succeeds silently and proves nothing was seeded.
+
    `analyze-complexity` (role `research`):
    ```bash
    node ${CLAUDE_PLUGIN_ROOT}/bin/task-master models --set-research "<configured>" --claude-code

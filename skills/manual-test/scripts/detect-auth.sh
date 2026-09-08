@@ -151,8 +151,31 @@ try_custom_bearer() {
   return 0
 }
 
+try_custom_hmac() {
+  grep -rqiE "(x-signature|x-hmac|hmac-sha256|hmacsha256|hmac\.getinstance|hmacsha256\.new|crypto\.createhmac)" \
+    "${SRC_INCLUDES[@]}" "${SRC_EXCLUDES[@]}" . 2>/dev/null || return 1
+
+  echo "unknown"
+  {
+    echo "Detected: custom HMAC/signature-based auth (no Bearer/session/JWT library, no"
+    echo "Spring Security dep, on $STACK) — NOT the same as no-auth. A gateway/service that"
+    echo "verifies a request signature (X-Signature / HMAC header) has real access control;"
+    echo "declaring it no-auth would scaffold unsigned tests that either false-pass against a"
+    echo "permissive dev server or 401/403 against a real one, either way not exercising the"
+    echo "actual check."
+    echo "checklist-gen cannot auto-fill an HMAC signature (it's request-specific, computed"
+    echo "over the body/timestamp) — add a signing step (setup: exec: <your signing script>,"
+    echo "capture the header) per test, or fill tokens.user_token by hand."
+    echo
+    echo "Agent: find the signature verification →"
+    echo "  grep -rniE \"hmac|signature\" --include='*.java' --include='*.kt' --include='*.go' --include='*.py' --include='*.js' --include='*.ts' . | head -10"
+  } >&2
+  return 0
+}
+
 emit_unknown() {
   try_custom_bearer && return 0
+  try_custom_hmac && return 0
   echo "unknown"
   {
     echo "Stack=$STACK — auth model not classified."
@@ -210,10 +233,13 @@ case "$STACK" in
     fi
 
     # No security dep ≠ no auth: a plain servlet Filter / HandlerInterceptor can
-    # read Authorization: Bearer itself. Check the source before declaring no-auth.
+    # read Authorization: Bearer itself, or verify an HMAC request signature (a
+    # lightweight gateway validating its own signature scheme has no Spring
+    # Security dep at all). Check the source before declaring no-auth.
     try_custom_bearer && exit 0
+    try_custom_hmac && exit 0
     echo "no-auth"
-    echo "Detected: No Spring Security / JWT deps, and no custom Authorization: Bearer handling in source." >&2
+    echo "Detected: No Spring Security / JWT deps, no custom Authorization: Bearer handling, and no HMAC/signature pattern found in source." >&2
     exit 0
     ;;
 

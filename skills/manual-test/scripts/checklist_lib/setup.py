@@ -25,19 +25,31 @@ from . import http, jsonpath, sql
 
 
 def run_steps(steps, ctx, dry_run=False, warn_only=False):
-    """Run a list of setup/teardown steps. Returns an error string or None.
+    """Run a list of setup/teardown steps.
 
-    warn_only=True (teardown): never raises/aborts — best-effort, prints warnings.
+    warn_only=False (setup): aborts on the first failure, returns the error string
+    (None if every step ok).
+
+    warn_only=True (teardown): best-effort — every step still runs even after one
+    fails. Returns the list of warning strings (empty if none), rather than only
+    printing them: a teardown step is often RECOVERY (undo a mutation, restore a
+    row), and a failed recovery that only prints to console vanishes into scrollback
+    — the caller has no way to know it happened, so it can't surface in the run's
+    JSON result or VERIFICATION.md, and the corrupted state it leaves behind then
+    breaks a LATER, unrelated test with no link back to the real cause.
     """
+    warnings = []
     for sb in steps or []:
         try:
             _run_one(sb, ctx, dry_run)
         except Exception as e:
             if warn_only:
-                print(f"      teardown warning: {e}")
+                msg = str(e)
+                print(f"      teardown warning: {msg}")
+                warnings.append(msg)
                 continue
             return str(e)
-    return None
+    return warnings if warn_only else None
 
 
 def _run_one(sb, ctx, dry_run):
