@@ -59,29 +59,23 @@ If impact spans multiple nodes, or you're unsure, run the full steps below.
    > **Scope reduction on an implemented feature:** If this change *removes* behavior AND `STATE.md` shows the feature is already implemented/verified, then `impacted.tasks = []` does NOT mean no code changes are needed. The removed behavior may exist in code even without its own TM task (written as part of a broader task). Before concluding no code work is needed: confirm the removed nodes have no corresponding code. If code exists → add a cleanup task in Step 4 (`task-add`) before closing.
 
 4. **Re-route impacted tasks**
-   **Per-feature tag:** every TM op here operates on the changed feature's tag — pass `tag: "<feature>"` (MCP) / `--tag <feature>` (CLI) so you re-open *this* feature's tasks, not another's. For each task ID in `impacted.tasks`:
+   **Per-feature tag:** every task op takes `--tag <feature>` so you re-open *this* feature's tasks, not another's. For each task ID in `impacted.tasks`:
+   ```bash
+   node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs task-set-status --tag <feature> --id <id> --status review
    ```
-   mcp__task-master-ai__set_task_status --id=<id> --status=review   # tag: "<feature>"
+   Net-new work not covered by an existing task → add one:
+   ```bash
+   node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs task-add --tag <feature> --title "<title>" \
+     [--description "<d>"] [--details "<d>"] [--priority high|medium|low]
    ```
-   Add new tasks for net-new work not covered by existing tasks (`mcp__task-master-ai__add_task`, `tag: "<feature>"`).
-
-   > **Never block on a missing MCP tool.** These are state ops — every one has a deterministic engine-CLI twin that writes the
-   > same `.taskmaster/tasks/tasks.json` with no AI and no MCP. Use it whenever the MCP tool is absent (a project `.mcp.json` can
-   > shadow the bundled server with a core-tier `task-master-ai`, which exposes no `add_task`) or errors on a missing API key:
-   > ```bash
-   > node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs task-add --tag <feature> --title "<title>" \
-   >   [--description "<d>"] [--details "<d>"] [--priority high|medium|low]
-   > node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs task-set-status --tag <feature> --id <id> --status review
-   > ```
-   > These live in `flow-tools.cjs`, **not** in `bin/task-master` (that CLI carries only the AI ops + `use-tag`/`init`/`models`/`tasks-import`).
-   > Full op→CLI mapping: see the Task Master note in `/sf:phase`. Do **not** hand the task back to the user as "tooling unavailable".
+   These are deterministic state ops on `.taskmaster/tasks/tasks.json` — no model, no MCP.
 
 5. **Re-implement**
    Run `/sf:phase` over the `review` tasks:
    - `route --sd .spec-flow/specs/<feature>/SD.md` routes each affected FR to fast/expand/deep.
-   - Executor edits code; logs files/approach/result via CLI `node ${CLAUDE_PLUGIN_ROOT}/bin/task-master update-task --id=<id> --append` (not `update-subtask` — it needs a `parent.sub` id and fails for un-expanded tasks).
+   - Executor edits code. Narrative logging (`task-master update-task --id <id> --tag <feature> --append`) is opt-in behind `config.phase.taskNotes` (default `false`) — see `/sf:phase` step 3; `trace-link` is the durable record either way.
    - **TDD (optional, recommended):** when the change is isolable in code and the stack has a unit harness, drive each task RED→GREEN→REFACTOR — failing unit test first, minimal change to green, then clean the diff without altering behavior. The durable regression anchor stays the §13.2 TC / CHECKLIST suite (stack-agnostic); the unit test is the fast inner loop, not a replacement.
-   - `mcp__task-master-ai__set_task_status` → `review` after each code change.
+   - `task-set-status --status review` after each code change.
    - Manual-test gate (step 6) before each task advances to `done`.
 
 6. **Re-verify**
