@@ -24,7 +24,13 @@ Input: `$ARGUMENTS` (new SRS file path). Change only what changed — the tracea
 
    **Guard — empty changeset (`emptyChangeset: true`):** STOP. `emptyChangeset` is true only when BOTH layers (anchor + prose) saw nothing — so this doc is almost certainly **not a revision** of the tracked SRS. Surface `data.hint` and ask the user: is this a **new/different feature** (→ `/sf:ingest`) or a **spec tweak** (→ `/sf:change`)? Do **not** run steps 2-8 (the whole pipeline would be a silent no-op against the wrong input). Only proceed if the user confirms they genuinely expected an empty delta (e.g. re-running after a partial resync).
 
-   **Anchor-blind case (anchor counts 0/0/0 but `proseCounts` non-zero):** this IS a genuine revision of a prose-form SRS. Continue the pipeline; feed `data.prose` entries (section + text) to sd-author as the changeset, and pass the whole srs-diff result file to `trace-impact --changeset` — it harvests FR-/TC-/ERR_ ids mentioned in the changed text.
+   **Anchor-blind case (anchor counts 0/0/0 but `proseCounts` non-zero):** this IS a genuine revision of a prose-form SRS. Continue the pipeline and feed `data.prose` entries (section + text) to sd-author as the changeset.
+
+   > **Do NOT rely on `trace-impact --changeset` alone here.** It seeds from FR-/TC-/ERR_ ids found *inside* the changed text, and prose acceptance criteria carry none — a bullet like "a duplicate submission returns the original result" never names FR-003. Verified: a prose-only changeset resolves to `impacted: {}`. Instead pull the distinctive nouns out of the changed bullets and pass them as keywords:
+   > ```
+   > node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs trace-impact --feature <feature> --keywords "idempotency,cancel"
+   > ```
+   > On the same change that `--changeset` missed entirely, `--keywords "idempotency,cancel"` resolved FR-003, TC-003, the error code, the implementing task and its file. Use `--changeset` when the SRS is anchored (ids in the text) and `--keywords` when it is prose; run both and union the results if unsure.
 
 2. **Resolve impact**
    Write the changeset JSON to a temp file, then:
@@ -32,7 +38,7 @@ Input: `$ARGUMENTS` (new SRS file path). Change only what changed — the tracea
    node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs trace-impact \
      --changeset <changeset.json>
    ```
-   Returns `{ impacted: { fr, tc, errors, tasks }, reasons }`. Use `--ids "FR-007,TC-012"` or `--keywords "callback,timeout"` for ad-hoc changesets.
+   Returns `{ impacted: { fr, tc, errors, tasks, files }, reasons }`. `--ids "FR-007,TC-012"` and `--keywords "callback,timeout"` are the direct forms — for a prose-form SRS `--keywords` is the ONLY one that resolves anything (see the anchor-blind note in step 1).
 
 3. **Update SD delta only**
    - Re-run `sd-skeleton --srs <srs_v2.md> --force` (the `--force` is required — sd-skeleton refuses to overwrite an existing SD otherwise; resync deliberately re-derives the impacted deterministic sections: §5.1 FR, §12.2 errors, §13.2 TC rows for impacted IDs).
