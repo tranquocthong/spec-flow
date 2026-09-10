@@ -238,3 +238,22 @@ test('drift-check: spec-not-evidenced must search WIDE before claiming a code is
       "a stranger's code outside file-links must NOT be attributed to this feature");
   });
 });
+
+test('drift-check: reads task notes as well as details', () => {
+  driftProject(() => {
+    // update-task --append writes `notes`; task-baseline --apply writes `details`.
+    // Reading only one field made the task-log source blind to the implement loop.
+    seedDrift(['ERR_FROM_NOTES', 'ERR_FROM_DETAILS'], []);
+    fsD.rmSync('src', { recursive: true, force: true });
+    fsD.mkdirSync(pathD.join('.taskmaster', 'tasks'), { recursive: true });
+    fsD.writeFileSync(pathD.join('.taskmaster', 'tasks', 'tasks.json'), JSON.stringify({
+      f: { tasks: [
+        { id: '1', title: 'a', status: 'done', notes: 'returned ERR_FROM_NOTES on bad input' },
+        { id: '2', title: 'b', status: 'done', details: 'added ERR_FROM_DETAILS for the retry path' },
+      ] },
+    }));
+    const r = drift['drift-check']({ feature: 'f' });
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.data.evidencedErrorCodes.sort(), ['ERR_FROM_DETAILS', 'ERR_FROM_NOTES']);
+  });
+});

@@ -582,3 +582,45 @@ test('(i) expand with host present: spec emitted with correct parentTaskId and e
     'spec.context.existingSubtaskIds must list both existing subtask ids'
   );
 });
+
+// --- update-task --append must actually append, and drift must read notes ---
+// Two defects found by dogfooding. `--append` appeared in the handler's own
+// signature comment but nothing read it, so every call REPLACED notes and only
+// the last one survived — the flag name was a lie. And the writer stores `notes`
+// while drift-check read `details`, so the task-log source was structurally blind.
+
+test('update-task --append concatenates instead of replacing notes', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sf-upd-'));
+  const prev = process.cwd();
+  try {
+    process.chdir(dir);
+    fs.mkdirSync(path.join('.taskmaster', 'tasks'), { recursive: true });
+    fs.writeFileSync(path.join('.taskmaster', 'tasks', 'tasks.json'), JSON.stringify({
+      t: { tasks: [{ id: '1', title: 'x', description: 'd', status: 'pending', priority: 'high',
+                     dependencies: [], subtasks: [], updatedAt: new Date().toISOString() }] },
+    }));
+    const read = () => JSON.parse(fs.readFileSync(path.join('.taskmaster', 'tasks', 'tasks.json'), 'utf8')).t.tasks[0];
+    await runCli(['update-task', '--id', '1', '--tag', 't', '--append', '--prompt', 'FIRST note']);
+    assert.match(read().notes || '', /FIRST note/);
+    await runCli(['update-task', '--id', '1', '--tag', 't', '--append', '--prompt', 'SECOND note']);
+    const n = read().notes || '';
+    assert.match(n, /FIRST note/, 'the earlier note must survive an append');
+    assert.match(n, /SECOND note/);
+  } finally { process.chdir(prev); }
+});
+
+test('update-task without --append still replaces notes', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sf-upd2-'));
+  const prev = process.cwd();
+  try {
+    process.chdir(dir);
+    fs.mkdirSync(path.join('.taskmaster', 'tasks'), { recursive: true });
+    fs.writeFileSync(path.join('.taskmaster', 'tasks', 'tasks.json'), JSON.stringify({
+      t: { tasks: [{ id: '1', title: 'x', description: 'd', status: 'pending', priority: 'high',
+                     dependencies: [], subtasks: [], notes: 'OLD', updatedAt: new Date().toISOString() }] },
+    }));
+    await runCli(['update-task', '--id', '1', '--tag', 't', '--prompt', 'NEW']);
+    const n = JSON.parse(fs.readFileSync(path.join('.taskmaster', 'tasks', 'tasks.json'), 'utf8')).t.tasks[0].notes;
+    assert.equal(n, 'NEW', 'without --append the replace semantics stay');
+  } finally { process.chdir(prev); }
+});
