@@ -19,11 +19,20 @@ def do_request(method, url, headers, body=None, timeout=15):
            "-X", method, "--max-time", str(timeout), url]
     for k, v in headers.items():
         cmd += ["-H", f"{k}: {v}"]
+    body_text = None
     if body is not None:
+        body_text = body if isinstance(body, str) else json.dumps(body)
         cmd += ["-H", "Content-Type: application/json"]
-        cmd += ["-d", body if isinstance(body, str) else json.dumps(body)]
+        # `-d @-` reads the body from stdin instead of argv (`-d <body>`): a
+        # large attachment (base64, TC-015's 10MB+ case) blew ARG_MAX with
+        # "Argument list too long" — a Python-level OSError the whole runner
+        # died on, not something the failing test itself could report. stdin
+        # has no such ceiling, and this is correct for every body size, not
+        # just large ones, so there is no small/large branch to keep in sync.
+        cmd += ["-d", "@-"]
 
-    raw = subprocess.run(cmd, capture_output=True, text=True).stdout
+    raw = subprocess.run(cmd, capture_output=True, text=True,
+                          input=body_text).stdout
     idx = raw.rfind(_STATUS_MARKER)
     if idx < 0:
         return 0, None, raw

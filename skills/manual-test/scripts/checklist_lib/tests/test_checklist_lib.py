@@ -374,6 +374,65 @@ class TestExecSetupStep(unittest.TestCase):
         self.assertEqual(ctx["varstore"].get("SIG"), "abc")
         self.assertEqual(ctx["varstore"].get("TS"), "123")
 
+
+class TestHttpSetupCaptureStep(unittest.TestCase):
+    """http: setup steps document (and the shipped templates use) `capture:` NESTED
+    inside the `http:` block — unlike `exec`/`sql`, whose payload is a bare string
+    with no nested mapping to put it in. `_do_http` read `sb.get("capture")`
+    (sibling-of-step, exec/sql's convention) instead of `h.get("capture")`
+    (nested-in-http, the one templates/CHECKLIST.yaml and every real checklist
+    actually write), so an http-setup capture always silently resolved to "" —
+    no exception, just a var that was never set. A checklist chaining setup calls
+    (register a platform, capture its id, PUT it, POST a key against it — see
+    templates/CHECKLIST.yaml's own worked TC-style examples) failed every
+    downstream step against an empty-string path segment instead."""
+
+    def _ctx(self):
+        return {"db": "d", "scripts_dir": ".", "base_url": "http://x",
+                "varstore": VarStore(), "tokens": {}, "doc": {}}
+
+    def test_http_setup_capture_populates_var(self):
+        from checklist_lib import setup, http
+        orig = http.do_request
+        http.do_request = lambda m, u, h, b: (201, {"id": "plat-123"}, "")
+        try:
+            ctx = self._ctx()
+            err = setup.run_steps(
+                [{"http": {"method": "POST", "path": "/v1/platforms",
+                           "capture": {"PLATFORM_ID": "$.id"}}}], ctx)
+        finally:
+            http.do_request = orig
+        self.assertIsNone(err)
+        self.assertEqual(ctx["varstore"].get("PLATFORM_ID"), "plat-123")
+
+    def test_captured_platform_id_chains_into_a_later_setup_step(self):
+        """The real-world shape: step 1 captures an id, step 2's path uses it. Before
+        the fix, step 2 always saw an empty PLATFORM_ID (this is exactly what
+        produced a 404 against `/v1/platforms/` with no id segment in production)."""
+        from checklist_lib import setup, http
+        seen_urls = []
+        orig = http.do_request
+
+        def fake(method, url, headers, body):
+            seen_urls.append(url)
+            if len(seen_urls) == 1:
+                return (201, {"id": "plat-456"}, "")
+            return (200, {}, "")
+
+        http.do_request = fake
+        try:
+            ctx = self._ctx()
+            err = setup.run_steps([
+                {"http": {"method": "POST", "path": "/v1/platforms",
+                          "capture": {"PLATFORM_ID": "$.id"}}},
+                {"http": {"method": "PUT", "path": "/v1/platforms/${PLATFORM_ID}"}},
+            ], ctx)
+        finally:
+            http.do_request = orig
+        self.assertIsNone(err)
+        self.assertTrue(seen_urls[1].endswith("/v1/platforms/plat-456"),
+                         f"second setup step used url {seen_urls[1]!r}, want it to end with the captured id")
+
     def test_nonzero_exit_is_an_error(self):
         from checklist_lib import setup
         err = setup.run_steps([{"exec": "exit 7"}], self._ctx())
@@ -565,6 +624,61 @@ class TestConfigVars(unittest.TestCase):
         ctx = {"varstore": vs, "db": "d", "scripts_dir": ".", "base_url": "", "tokens": {}, "doc": {}}
         setup.run_steps([{"vars": {"K": "v"}}], ctx, dry_run=True)
         self.assertEqual(vs.get("K"), "v")
+
+
+class TestHttpRequestBodyViaStdin(unittest.TestCase):
+    """A large body (TC-015: an 11MB base64 attachment) passed as a `-d <body>` argv
+    element blew ARG_MAX ("Argument list too long") — an OSError from subprocess
+    itself, so the *runner* died rather than the one test failing. The body must
+    travel through curl's stdin (`-d @-` + `input=`), never argv, regardless of
+    size — so there is one code path, not a small/large-body branch to keep in
+    sync."""
+
+    def test_body_never_appears_in_argv(self):
+        from checklist_lib import http
+        captured = {}
+
+        class FakeResult:
+            stdout = "\n__HTTP_STATUS__=200"
+
+        def fake_run(cmd, capture_output, text, input=None):
+            captured["cmd"] = cmd
+            captured["input"] = input
+            return FakeResult()
+
+        orig = __import__("subprocess").run
+        import subprocess as sp
+        sp.run = fake_run
+        try:
+            big_body = {"content": "x" * 200}
+            http.do_request("POST", "http://x/v1/messages", {}, big_body)
+        finally:
+            sp.run = orig
+
+        self.assertIn("@-", captured["cmd"])
+        for arg in captured["cmd"]:
+            self.assertNotIn("xxxxxxxxxx", arg, "body content leaked into argv instead of stdin")
+        self.assertIn('"content"', captured["input"])
+
+    def test_no_body_sends_no_stdin(self):
+        from checklist_lib import http
+        captured = {}
+
+        class FakeResult:
+            stdout = "\n__HTTP_STATUS__=204"
+
+        def fake_run(cmd, capture_output, text, input=None):
+            captured["input"] = input
+            return FakeResult()
+
+        import subprocess as sp
+        orig = sp.run
+        sp.run = fake_run
+        try:
+            http.do_request("GET", "http://x/healthz", {})
+        finally:
+            sp.run = orig
+        self.assertIsNone(captured["input"])
 
 
 if __name__ == "__main__":

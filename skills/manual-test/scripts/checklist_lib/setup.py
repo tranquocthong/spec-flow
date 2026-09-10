@@ -120,7 +120,15 @@ def _do_http(sb, ctx, dry_run):
     status, jbody, _ = http.do_request(method, url, headers, body)
     if status >= 400:
         raise RuntimeError(f"setup http {method} {path} → {status}")
-    for var, expr in (sb.get("capture") or {}).items():
+    # `capture:` is documented and templated as nested INSIDE the `http:` block
+    # (sibling of method/path/token/body — see templates/CHECKLIST.yaml and this
+    # module's own docstring), not as a sibling of `http:` at the step level (that
+    # convention is `exec`'s, whose payload is a bare string with nowhere else to
+    # put it). Reading `sb.get("capture")` here always missed it — silently: no
+    # exception, just an empty dict, so every http-setup capture ever set its var
+    # to "" via the fallback below instead of raising a clear error. `h` IS
+    # `sb["http"]`, so `h.get("capture")` is where the value actually lives.
+    for var, expr in (h.get("capture") or {}).items():
         vals = jsonpath.resolve(vs.expand(expr), jbody) if jbody is not None else []
         vs.set(var, vals[0] if vals else "")
 
