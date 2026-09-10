@@ -118,3 +118,31 @@ test('hydrateTrace: a null/absent trace is returned as-is', () => {
     assert.equal(core.hydrateTrace('f', null), null);
   });
 });
+
+test('hydrateTrace: a null feature falls back to trace.feature and never throws', () => {
+  inTmp(() => {
+    // The global .spec-flow/trace.json mirror is read with NO feature argument
+    // (resolveActiveFeature / state-update without --feature — and every command's
+    // re-anchor line tells the agent to "run state-update after each step" with no
+    // --feature). fileLinksPathFor(null) throws on path.join, so an unguarded
+    // hydrate turned that documented path into `INTERNAL: path argument must be of
+    // type string`. hydrateTrace's contract says it never throws; hold it to that.
+    seed('f', [{ task: '1', fr: 'FR-001', file: 'src/a.js' }], [{ id: 1, title: 'x', status: 'done' }]);
+    const t = SLIM();            // carries feature: 'f'
+    const h = core.hydrateTrace(null, t);
+    assert.ok(h, 'must return a trace, not throw');
+    assert.deepEqual(h.nodes.files.map(n => n.path), ['src/a.js'],
+      'falls back to trace.feature so the mirror still hydrates');
+  });
+});
+
+test('hydrateTrace: no feature anywhere skips file-links instead of throwing', () => {
+  inTmp(() => {
+    const t = SLIM();
+    delete t.feature;
+    const h = core.hydrateTrace(undefined, t);
+    assert.ok(h);
+    assert.deepEqual(h.nodes.files, [], 'nothing to scope to → empty, not an exception');
+    assert.equal(h.links.length, 1, 'authoritative links survive');
+  });
+});
