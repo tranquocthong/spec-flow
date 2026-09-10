@@ -511,3 +511,240 @@ test('resolveRepoVerify: unrunnable command + unknown build tool → note, comma
   assert.equal(eff.verify.testCommand, './gradlew test', 'nothing to swap in — leave it');
   assert.match(eff.note, /no known build tool was detected/);
 });
+
+// --- US-5: parseUserStories must accept the SHIPPED template's US form -----
+// FR-027/FR-030, BL-11. parseHeadings only matches ATX headings (^#{1,6}\s+),
+// and parseUserStories iterates only those — but templates/srs-template.md
+// writes user stories as a BOLD PARAGRAPH (**US-1: <name>**). Anyone following
+// the shipped template harvested 0 stories -> 0 FR -> 0 TC, with no warning.
+
+test('parseUserStories: bold-paragraph form (**US-1: ...**) is parsed', () => {
+  const md = [
+    '# Feature: x',
+    '## 4. User Stories',
+    '',
+    '**US-1: bold form story**',
+    '',
+    '- As a developer,',
+    '- I want to X,',
+    '- So that Y.',
+    '',
+    '#### Acceptance Criteria',
+    '',
+    '- first criterion',
+    '- second criterion',
+    '',
+    '#### Edge Cases',
+    '',
+    '- an edge',
+    '',
+  ].join('\n');
+  const st = core.parseUserStories(md);
+  assert.equal(st.length, 1, 'bold-paragraph US must be found');
+  assert.equal(st[0].id, 'US-1');
+  assert.equal(st[0].name, 'bold form story');
+  assert.equal(st[0].role, 'developer');
+  assert.deepEqual(st[0].acceptance, ['first criterion', 'second criterion']);
+  assert.deepEqual(st[0].edges, ['an edge']);
+});
+
+test('parseUserStories: ATX heading form still works, two-digit ids included', () => {
+  const md = [
+    '## 4. User Stories',
+    '### US-01: heading form',
+    '- As an operator,',
+    '#### Acceptance Criteria',
+    '- crit a',
+    '### US-02: second',
+    '- As an admin,',
+    '#### Acceptance Criteria',
+    '- crit b',
+  ].join('\n');
+  const st = core.parseUserStories(md);
+  assert.equal(st.length, 2);
+  assert.equal(st[0].id, 'US-01');
+  assert.equal(st[1].id, 'US-02');
+  assert.equal(st[0].role, 'operator');
+  assert.deepEqual(st[1].acceptance, ['crit b']);
+});
+
+test('parseUserStories: mixed forms do not produce a duplicate story', () => {
+  const md = [
+    '## 4. User Stories',
+    '### US-1: heading wins',
+    '- As a developer,',
+    '#### Acceptance Criteria',
+    '- from heading',
+    '',
+    '**US-1: bold duplicate**',
+    '',
+    '- As an intruder,',
+    '',
+  ].join('\n');
+  const st = core.parseUserStories(md);
+  assert.equal(st.length, 1, 'same id must not be emitted twice');
+  assert.equal(st[0].name, 'heading wins', 'first occurrence wins');
+});
+
+test('parseUserStories: a bold line that merely mentions US-N is not a story', () => {
+  const md = [
+    '## 4. User Stories',
+    '**US-1: real story**',
+    '- As a developer,',
+    '',
+    'Some prose that references **US-1** inline and must not create a story.',
+    '',
+  ].join('\n');
+  const st = core.parseUserStories(md);
+  assert.equal(st.length, 1);
+});
+
+// --- US-5: the shipped SRS template must parse with the shipped parser ----
+// FR-025/FR-026 + TC-035/TC-037. A template that cannot parse itself is the
+// fail condition (BL-13): Pass-1 harvest exists to save sd-author tokens, and
+// it silently produced 0 FR / 0 TC / 0 NFR for anyone following the template.
+
+test('parseSrs: the shipped srs-template.md harvests stories and an NFR table', () => {
+  const fs2 = require('node:fs');
+  const path2 = require('node:path');
+  const md = fs2.readFileSync(path2.join(__dirname, '..', 'templates', 'srs-template.md'), 'utf8');
+  const s = core.parseSrs(md);
+  assert.ok(s.stories.length > 0, 'template must yield at least one user story');
+  assert.ok(s.nfrTable && s.nfrTable.rows.length > 0,
+    'template §6.1 NFR table must be found by the NFR- id prefix');
+  // The acceptance-criteria bullets are what Pass-1 turns into FR + TC rows, so
+  // the template must SHOW parseable bullets, not describe them in prose.
+  assert.ok(s.stories[0].acceptance.length > 0,
+    'template US-1 must carry example acceptance bullets (they become FR/TC rows)');
+  assert.ok(s.stories[0].edges.length > 0,
+    'template US-1 must carry example edge-case bullets');
+});
+
+test('parseSrs: NFR ids are found even when they are not in column 0', () => {
+  const md = [
+    '# Feature: x',
+    '## 6. Non-Functional Requirements',
+    '',
+    '| STT | ID | Requirement | Target |',
+    '| --- | --- | --- | --- |',
+    '| 1 | NFR-1 | Response time | p99 < 200ms |',
+    '| 2 | NFR-2 | Throughput | 1000 rps |',
+    '',
+  ].join('\n');
+  const s = core.parseSrs(md);
+  assert.ok(s.nfrTable, 'NFR table must be found when ids sit in column 1');
+  assert.equal(s.nfrTable.rows.length, 2);
+  assert.equal(s.nfrTable.idCol, 1, 'the matched id column index must be reported');
+});
+
+test('parseSrs: FR/TC id tables still resolve from column 0', () => {
+  const md = [
+    '# Feature: x',
+    '## 5. Functional Requirements',
+    '',
+    '| ID | Requirement | Priority |',
+    '| --- | --- | --- |',
+    '| FR-1 | do a thing | Must Have |',
+    '',
+    '| TC ID | Test Case | Flow |',
+    '| --- | --- | --- |',
+    '| TC-1 | verify the thing | happy |',
+    '',
+  ].join('\n');
+  const s = core.parseSrs(md);
+  assert.equal(s.frTable.rows.length, 1);
+  assert.equal(s.frTable.idCol, 0);
+  assert.equal(s.tcTable.rows.length, 1);
+});
+
+// --- US-5: EMPTY_HARVEST — a silent zero harvest is not acceptable --------
+// FR-028/FR-029, BL-12, D7. sd-skeleton used to report userStories:0, fr:0,
+// testCases:0 with an EMPTY warnings array: the failure was invisible and the
+// whole cost silently moved to sd-author, the most expensive pass. Warning
+// only — never blocks, since an SRS may legitimately be mid-draft.
+
+test('genSd: EMPTY_HARVEST names every bucket that came back zero', () => {
+  const srs = core.parseSrs('# Feature: nothing\n\nJust prose, no tables, no stories.\n');
+  const r = core.genSd(srs, { type: 'api', feature: 'nothing' });
+  const w = r.warnings.find(x => x.startsWith('EMPTY_HARVEST'));
+  assert.ok(w, 'an all-zero harvest must produce an EMPTY_HARVEST warning');
+  for (const bucket of ['userStories', 'fr', 'tc']) {
+    assert.ok(w.includes(bucket), `warning must name the empty bucket "${bucket}"`);
+  }
+  assert.ok(/###\s*US-|Acceptance/i.test(w), 'warning must hint at the expected format');
+  assert.equal(r.stats.userStories, 0);
+  assert.ok(typeof r.sd === 'string' && r.sd.length > 0, 'D7: still returns an SD, never blocks');
+});
+
+test('genSd: a healthy harvest produces no EMPTY_HARVEST warning', () => {
+  const md = [
+    '# Feature: healthy',
+    '## 4. User Stories',
+    '### US-1: a story',
+    '- As a developer,',
+    '#### Acceptance Criteria',
+    '- the thing works',
+    '- the other thing works',
+  ].join('\n');
+  const r = core.genSd(core.parseSrs(md), { type: 'api', feature: 'healthy' });
+  assert.equal(r.warnings.filter(x => x.startsWith('EMPTY_HARVEST')).length, 0);
+  assert.ok(r.stats.fr > 0);
+});
+
+test('genSd: a partial harvest flags only the buckets that are empty', () => {
+  const md = [
+    '# Feature: partial',
+    '## 4. User Stories',
+    '### US-1: a story',
+    '- As a developer,',
+    '#### Acceptance Criteria',
+    '- the thing works',
+  ].join('\n');
+  const r = core.genSd(core.parseSrs(md), { type: 'api', feature: 'partial' });
+  const w = r.warnings.find(x => x.startsWith('EMPTY_HARVEST'));
+  if (w) {
+    assert.ok(!w.includes('userStories'), 'a bucket that harvested rows must not be listed');
+    assert.ok(!w.includes(' fr'), 'fr harvested rows, so it must not be listed');
+  }
+});
+
+test('genSd: no EMPTY_HARVEST when FR+TC are healthy but the SRS uses no user stories', () => {
+  // 30/33 real SRSs write FR tables directly and never use a user-story section.
+  // That is a legitimate authoring style, not a harvest failure — warning on it
+  // would make EMPTY_HARVEST fire on almost every real document and mean nothing.
+  const md = [
+    '# Feature: table-style',
+    '## 5. Functional Requirements',
+    '',
+    '| ID | Requirement | Priority |',
+    '| --- | --- | --- |',
+    '| FR-1 | do a thing | Must Have |',
+    '| FR-2 | do another | Must Have |',
+    '',
+    '| TC ID | Test Case | Flow |',
+    '| --- | --- | --- |',
+    '| TC-1 | verify thing | happy |',
+    '',
+  ].join('\n');
+  const r = core.genSd(core.parseSrs(md), { type: 'api', feature: 'table-style' });
+  assert.equal(r.stats.userStories, 0);
+  assert.ok(r.stats.fr > 0 && r.stats.testCases > 0);
+  assert.equal(r.warnings.filter(x => x.startsWith('EMPTY_HARVEST')).length, 0,
+    'a healthy FR+TC harvest must not warn merely because user stories are absent');
+});
+
+test('genSd: FRs with zero test cases is flagged as a coverage gap', () => {
+  const md = [
+    '# Feature: no-tests',
+    '## 5. Functional Requirements',
+    '',
+    '| ID | Requirement | Priority |',
+    '| --- | --- | --- |',
+    '| FR-1 | do a thing | Must Have |',
+    '',
+  ].join('\n');
+  const r = core.genSd(core.parseSrs(md), { type: 'api', feature: 'no-tests' });
+  const w = r.warnings.find(x => x.startsWith('EMPTY_HARVEST'));
+  assert.ok(w, 'FR present but TC empty is a real gap and must warn');
+  assert.ok(w.includes('tc'), 'the warning must name tc');
+});

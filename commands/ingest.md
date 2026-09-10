@@ -103,41 +103,7 @@ With a file path given, skip Mode 0 and go straight to the Steps.
 8. **Gate — SD approval is the human control point; do NOT seed tasks yet**
    Count remaining `TODO:MANUAL-REVIEW` markers with `grep -cE '\*\*TODO:MANUAL-REVIEW\*\*' <SD path>` — a **bare `grep TODO:MANUAL-REVIEW` is wrong** and over-counts: the string legitimately appears in the Pass-1 preamble banner, sd-author's Pass-2 summary (`TODO:MANUAL-REVIEW remaining: 0`), and revision-history entries recording markers that were already cleared. Only the **bold** `**TODO:MANUAL-REVIEW**` form is an unresolved marker — including one embedded mid-line inside a table cell (§5.1/§5.2/§12.2/§13.2 placeholder rows) or list item, not just a standalone blockquote. (`status-report` / `/sf:doctor --sd` already report the anchored count — prefer reading that over grepping.) Report: SD path, design type, section coverage (FR count, TC count, unresolved TODOs), and the full list of each TODO location and reason. **Refuse to call `parse_prd` while any `TODO:MANUAL-REVIEW` remains.** Then **STOP and hand back to the human** to review + get leader approval — this is the one gate that is theirs. (`task-master parse-prd` itself also refuses with `SD_NOT_APPROVED` when the `--input` SD still has unresolved markers, so an accidental/early call is caught even if this instruction is skipped — `--force` is the explicit, intentional override, not a routine flag.)
 
-   **After the human approves, the rest is the AGENT's job — not a list of CLI chores for the user.** When you run `/sf:checklist` (scaffolds `CHECKLIST.yaml`) and then `/sf:phase`, the agent seeds tasks itself with a **per-feature `--tag`** (isolates this feature's tasks from any other feature/bug/change). Before each AI op, run `taskmaster-model-plan --role <role>` and read the returned JSON yourself — no need to re-parse it. If `needsChange: false`, run the AI op directly. If `needsChange: true`, substitute `configured`/`previous` as literal values into one combined shell block (set → op → `trap` restore, kept in one Bash call so the `trap` stays active for the AI op):
-
-   `parse-prd` (role `main`):
-   ```bash
-   node ${CLAUDE_PLUGIN_ROOT}/bin/task-master models --set-main "<configured>" --claude-code
-   trap "node ${CLAUDE_PLUGIN_ROOT}/bin/task-master models --set-main '<previous>' --claude-code" EXIT
-   node ${CLAUDE_PLUGIN_ROOT}/bin/task-master parse-prd --input .spec-flow/specs/<feature>/SD.md --tag <feature>
-   ```
-
-   **This is Phase 1 only — exit 0 here does NOT mean tasks are seeded.** The default
-   `taskCore.aiMode` is `agent-native`: the command above prints a `GenerationSpec` JSON
-   object to stdout and exits 0 — it does not call an LLM itself (zero-network by design;
-   see `docs/agent-native-two-phase.md`). Treat that stdout as a handoff to YOU, not as a
-   completed result:
-   1. Parse the printed JSON. It has `operation`, `tag`, `inputContent` (the SD content),
-      `taskSchema`, `expectedOutput`, `instructions`, `context`.
-   2. Generate the `Task[]` array yourself, following `instructions` + `taskSchema` against
-      `inputContent` — this is Phase 2, and you (the agent) are the LLM it's deferring to.
-   3. Write that array to a temp JSON file, then run Phase 3 to actually persist it:
-      ```bash
-      node ${CLAUDE_PLUGIN_ROOT}/bin/task-master tasks-import --tag <feature> --file <path-to-generated-tasks.json>
-      ```
-      `tasks-import` prints `{"imported": N}` on success — THAT is the real seeding signal,
-      not the Phase 1 exit code. Confirm with
-      `node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs task-list --tag <feature>` (or
-      `status-report --feature <feature>`) before assuming tasks exist —
-      running `use-tag` on an empty tag succeeds silently and proves nothing was seeded.
-
-   `analyze-complexity` (role `research`):
-   ```bash
-   node ${CLAUDE_PLUGIN_ROOT}/bin/task-master models --set-research "<configured>" --claude-code
-   trap "node ${CLAUDE_PLUGIN_ROOT}/bin/task-master models --set-research '<previous>' --claude-code" EXIT
-   node ${CLAUDE_PLUGIN_ROOT}/bin/task-master analyze-complexity --tag <feature> --research
-   ```
-   **The agent CAN run these** (same as every other CLI AI op in `/sf:phase`): the keyless `claude-code` provider reaches the Claude binary via `CLAUDE_CODE_EXECPATH` (set by the host), so `which claude` printing nothing on the Bash PATH does *not* mean it can't run. Use the **CLI** form above (reads `.taskmaster/config.json` fresh); the MCP `parse_prd` tool can fail on a stale-cached provider (see the Task Master note in `/sf:phase`). Only if the CLI genuinely errors on a missing provider/key do you ask the user to run it in their terminal.
+   **After the human approves, the rest is the AGENT's job — not a list of CLI chores for the user.** Run `/sf:checklist` (scaffolds `CHECKLIST.yaml`), then `/sf:phase`, which seeds the tasks itself under a per-feature `--tag`. The seeding mechanics (the three-phase `parse-prd` handoff) live in `/sf:phase` Step 0 — do not duplicate them here, and do not run `parse-prd` from `/sf:ingest`.
 
    **Backfill ingest (the feature was implemented BEFORE this SD existed):** `parse-prd` seeds EVERYTHING as `pending` — including scope that already ships — so a later `/sf:phase` could re-implement working code. After the shipped scope has passed `/sf:manual-test` (VERIFICATION.md exists), run:
    ```

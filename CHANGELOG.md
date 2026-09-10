@@ -2,6 +2,85 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [0.10.0] — 2026-09-10
+
+**One dogfooding session aimed at speed, which then found ten bugs — seven of them older than this release.** The intent was narrow: cut the token cost of the implement loop and the size of the artifacts it writes. Measured against four months of real use (37 features, 408 tasks, 31 tags in one 16-repo project). What made the bug count high is that the cuts forced every command to actually be RUN, and several code paths turned out never to have executed end to end. Fixing one layer kept exposing the next.
+
+### Group 1 — false-green / wrong state
+
+- **The ship gate could be opened by a document forbidding the ship.** `verified` was decided by `/status:\s*passed/i` tested against the WHOLE `VERIFICATION.md` — a substring match. A file whose status line reads `failed` and whose body reads "Do NOT ship. 12 regression tests are red. This must not be recorded as `status: passed`" reported `verified: true`. G3 (do not ship unless VERIFICATION reads status: passed) was therefore satisfiable by prose. It now matches only a real `status:` line.
+- **`verified-adhoc` never counted as verified — and that has been live.** The same substring regex only looked for `passed`, so eight already-shipped features in a real project have been reading as NOT verified: `/sf:status` said so, and G3 would have blocked them. `/sf:phase` close-out step 4 has always treated `verified-adhoc` as shippable. Both statuses are now accepted, checked against 30 real VERIFICATION files (eight flip false→true, none flip true→false).
+- **`update-task --append` never appended.** The flag appeared in its own handler's signature comment and was read by nothing, so every call replaced `notes` wholesale and only the most recent entry survived. Verified before the fix: two successive appends left only the second.
+- **`drift-check` read a field nothing writes.** `update-task` stores `notes`, `task-baseline --apply` stores `details`, and drift-check read only `details` — so its task-log source was structurally blind to every note the implement loop ever wrote. It now reads both, on tasks and subtasks.
+- **`drift-check` answered "clean" having read nothing.** Its only source was those task logs, which are opt-in since this release and had never worked anyway (see Group 4), so it returned `clean: true` with zero input — a false negative sitting behind a gate meant to catch SD mismatch. The primary source is now the shipped CODE, scanned deterministically. With no source at all the answer is `clean: null` (undetermined).
+- **`drift-check` scoping needed to be asymmetric, and a first attempt got it wrong.** Scoping the scan to `file-links.json` produced a false positive on a real feature: it reported `transaction.auth.limit.exceeded` missing from §12.2's implementation when that code sits in four files of a sibling repo, simply absent from that feature's own 28-entry file-links. Absence has to be PROVEN, so `spec-not-evidenced` now searches wide (scanPath plus every `config.repos` sibling); authorship is narrow, so `impl-not-specced` still searches only the files this feature wrote — a wide search there attributed 39 neighbouring error codes to one feature.
+
+### Group 2 — speed, which was the point
+
+- **`commands/phase.md`: 274 → 171 lines, ~7,718 → ~3,642 tokens (−53%).** Removed the CLI-vs-MCP preamble, the MCP→CLI fallback table, the `use-tag`/`currentTag` workaround, every `models --set-*` + `trap` restore dance, and the verbose agent-native handoff prose. All twelve engine gates verified intact by diff; every referenced command resolves; no section lost. Removing the `use-tag` block was validated by pointing `currentTag` at the wrong feature and confirming all seven task ops still write to the right tag.
+- **`analyze-complexity` removed from the loop.** An AI op per feature whose output no consumer read — routing is and always was driven by the deterministic `route --sd`. `route` output is byte-identical on four real SDs before and after. The engine op definition stays, so manual invocation still works.
+- **`update-task --append` is opt-in behind `config.phase.taskNotes` (default `false`).** One AI subprocess per task, 13.2 tasks per feature on average, for human-readable history that is not the source of truth. `trace-link` and the task status stay unconditional. An absent key reads as `false`, so existing projects get the speedup without editing config.
+- **`trace.json`: 1,166 → 434 lines per feature (−63%).** It was 36% of all planning-artifact churn while carrying data fully re-derivable from stores already persisted separately — 63.2% of 4,051 links and 40.9% of 3,166 nodes across 31 real features. `core.hydrateTrace()` rebuilds them at read time. Links are now serialized one per line, so a changed link is one diff line rather than a five-line block. `generatedFrom` is stored relative to the repo root; the absolute path produced a spurious diff on every rebuild on every machine.
+- **`templates/sd-template.md`: 1,032 → 720 lines (−30%).** Removed the sections 34 shipped SDs never use: Message Queue 0/34, Security Considerations 0/34, Risks & Mitigations 0/34, Stakeholders 1/34, Table of Contents 0/34, Document Information 0/34. Revision History (35/34) is kept. §7 "Database Design" becomes "Data Model", which 25 of 34 real SDs already renamed it to. The Glossary is emitted only when the SRS defines terms — it was 904 dead lines, mostly an empty placeholder row. §9.2 keeps one worked endpoint instead of a five-verb CRUD catalogue; §9.4 and §10.8 keep one sequence diagram each.
+- **Section numbering is NOT renumbered.** Renumbering would have touched 1,833 references — 337 inside spec-flow and 1,496 across already-shipped SDs — plus five number-keyed cross-checks in `lib/trace.cjs`, in exchange for a contiguous sequence. Gapped numbering is already the working reality. A note at the top of the template explains the gaps so nobody "fixes" them.
+- **`commands/` overall: 25,626 → ~20,800 tokens.** `ingest.md` lost a 30-line block that duplicated `/sf:phase` Step 0 verbatim while `/sf:ingest` does not seed tasks at all. `change.md` and `resync.md` now call the deterministic task ops directly instead of presenting them as an MCP fallback.
+
+### Group 3 — the shipped template could not be parsed by the shipped parser
+
+Pass-1's whole purpose is to hand sd-author a pre-filled draft. It silently produced 0 FR / 0 TC / 0 NFR for anyone following the shipped SRS template. Measured on 33 real SRSs: 22 harvest zero FRs, yet those features shipped SDs carrying 15–29 FRs each — sd-author derived all of it, at the most expensive point in the flow.
+
+- `parseUserStories` now accepts both forms a story can be written in: an ATX heading (`### US-01: name`), which real SRSs use, and a whole-line bold paragraph (`**US-1: name**`), which the template used. Mixed forms dedupe first-wins, and an inline `**US-1**` mid-sentence is prose, not an anchor.
+- `tableByIdPrefix` locates ids by cell content instead of hardcoding column 0, and reports the matched column as `idCol` — a leading `STT`/`No.`/`#` column no longer hides an entire table.
+- `srs-template.md`: the user story becomes an ATX heading, the NFR table gains an ID column, and the acceptance/edge-case sections now SHOW example bullets instead of describing them in prose — those bullets are exactly what Pass-1 turns into FR and TC rows. Harvest on the shipped template: 0/0/0/0 → 1 story, 5 FR, 4 NFR, 2 error codes, 5 TC.
+- New `EMPTY_HARVEST` warning names the empty buckets and the shape each expects. Its condition was narrowed after measurement: warning on any empty bucket fired on 30/33 real SRSs including one with a healthy 49 FR / 60 TC, because writing FR tables without user stories is a legitimate style. It fires only when `fr == 0`, or `fr > 0` with `tc == 0` — 22/33, all genuine. Advisory, never blocks.
+
+### Group 4 — commands documented in a form the CLI rejects
+
+None of these had ever run as written, and all predate this release:
+
+```
+task-master update-task --id=<id> --append       -> exit 1, "--id is required"
+task-master update-task --id <id> --tag <f> ...  -> exit 0, "Task 2 updated."
+```
+
+The parser wants a space, not an equals sign, and without `--tag` the tag resolves to `undefined` and the op fails `ERR_TASK_NOT_FOUND`. The same defect applied to `expand --id=<id>` and, in `resync.md`, `update --from=<id>`. **The `expand` case matters most: complexity 4–7 routes to `expand`, so the middle tier of the adaptive loop has been silently failing** — `route --sd` sends 25 of 34 FRs down that path on a typical feature. Fixed in `phase.md`, `change.md`, `resync.md` and `agents/hybrid-executor.md`.
+
+This also corrects a claim: the ~14 AI calls per feature credited to `phase.taskNotes` were mostly failed subprocesses, not AI calls. One real AI op was removed (`analyze-complexity`, which did work because it passes `--tag`).
+
+### Group 5 — noise and discoverability
+
+- **A multi-repo run with no repo scope now says what to do.** `verify-code --feature X --task 1` on a 16-repo hub scanned every configured repo and returned `scope: null` with 64 check rows, most of them failures from repos the feature had never touched. Declaring the targets with `trace-repos --set` takes the same run to 4 checks — it just was not discoverable from the failure. An `UNSCOPED` warning now names `trace-repos --set`, `--repos`, and the `trace-link --repo` route.
+- **`resync.md` pointed the anchor-blind path at the query that cannot resolve it.** `trace-impact --changeset` seeds from FR-/TC-/ERR_ ids found INSIDE the changed text, and prose acceptance criteria carry none. On a real SRS revision (15 added / 9 removed bullets) the changeset path resolved `impacted: {}` — nothing — while `--keywords` resolved 13 FR, 34 TC, 8 tasks and 23 files. The doc now says which query suits which SRS shape, with the measured comparison.
+- **`checklist-gen` warning text follows the §7 rename.** Detection is by section NUMBER, so "Data Model" was never affected; only the message said otherwise. Three stale references to SD §8 (Message Queue, removed above) also fixed.
+
+### Fixed within this release
+
+- **`hydrateTrace` threw when a trace was read without a feature.** Introduced by the trace change itself: `fileLinksPathFor(null)` throws on `path.join`, and the global mirror is read with no feature all over the flow — including `state-update --note "..."`, which every command's re-anchor line tells the agent to run after each step. It went from `ok: true` to `INTERNAL: The "path" argument must be of type string`. The function's contract is never to throw; it now falls back to the trace's own feature and skips the file-links half when there is none. The other four commands that read a trace without `--feature` were swept and had no equivalent crash.
+
+### Behaviour changes to be aware of
+
+- **`trace.json` format.** Old fat traces are read normally and self-slim on the next `trace-build` — no migration script, no user action. Anything reading `nodes.files` / `nodes.tasks` / `task-file` / `fr-file` / `fr-task` straight off disk must call `core.hydrateTrace()` instead. Equivalence checked with 210 `trace-impact` comparisons across 35 real features: zero differences.
+- **`drift-check` can return `clean: null`.** Scripts keying on `clean === true` should treat null as undetermined, not clean.
+- **`config.phase.taskNotes` defaults to `false`.** Projects that relied on per-task narrative history must set it to `true`; note that it never actually worked before Group 4.
+- **Four SD template sections are gone.** Existing SDs are unaffected — only newly generated ones follow the trimmed template, and old section numbers still parse.
+
+### Rolling back to 0.9.0
+
+Tested, and safe with one required step. No command crashes: 0.9.0 reads a slim `trace.json` without error, and one `trace-build` per feature restores the fat format.
+
+**Until you run that rebuild, impact analysis silently under-reports.** 0.9.0 has no `hydrateTrace`, so the derived half is simply absent: on a real feature, `trace-impact --ids FR-010` returned 0 files and 0 tasks against the slim trace where 0.10.0 returns 17 and 5; `--keywords cert` lost 6 tasks and 21 files. A `/sf:change` on that FR would resolve to zero tasks and read as "nothing to reopen". `STATE.md` also reports the persisted link count rather than the full one (41 instead of 245 on one feature).
+
+So if you roll back, immediately run for each feature:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs trace-build --sd .spec-flow/specs/<feature>/SD.md --feature <feature>
+```
+
+### Known gaps
+
+- All 41 test cases of this release's own feature are `no-verify`: the manual-test runner supports `request` / `request.kafka` / `verify: SQL` and this was a CLI change with no HTTP surface. Evidence is 900+ unit tests plus the 210-probe equivalence run, not a checklist sweep. `run-checklist --json` still counts `no-verify` tests as `passed`, which is a false green recorded in backlog.
+- `commands/phase.md` was executed step by step against a real project's state, but never LOADED by the plugin runtime — the marketplace serves command markdown from a pinned cache. First real `/sf:phase` after this release is the remaining test.
+
 ## [0.9.0] — 2026-09-08
 
 **Nineteen rough edges from one real dogfooding session (an eid-gateway feature and a 26-FR/47-TC phase), grouped by what they actually cost.** Group 1 is false-green / lost-evidence: a command reports success, or asserts nothing, while the thing it claims to check never happened. Group 2 is noise that wastes time without corrupting the result. Both groups share one theme this release keeps hitting: an engine that silently drops the SECOND (or third, or fourth) matching thing — a table, a repo, an FR, a stderr stream — instead of merging or naming what it dropped.

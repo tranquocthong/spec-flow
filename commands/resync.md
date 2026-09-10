@@ -24,7 +24,13 @@ Input: `$ARGUMENTS` (new SRS file path). Change only what changed — the tracea
 
    **Guard — empty changeset (`emptyChangeset: true`):** STOP. `emptyChangeset` is true only when BOTH layers (anchor + prose) saw nothing — so this doc is almost certainly **not a revision** of the tracked SRS. Surface `data.hint` and ask the user: is this a **new/different feature** (→ `/sf:ingest`) or a **spec tweak** (→ `/sf:change`)? Do **not** run steps 2-8 (the whole pipeline would be a silent no-op against the wrong input). Only proceed if the user confirms they genuinely expected an empty delta (e.g. re-running after a partial resync).
 
-   **Anchor-blind case (anchor counts 0/0/0 but `proseCounts` non-zero):** this IS a genuine revision of a prose-form SRS. Continue the pipeline; feed `data.prose` entries (section + text) to sd-author as the changeset, and pass the whole srs-diff result file to `trace-impact --changeset` — it harvests FR-/TC-/ERR_ ids mentioned in the changed text.
+   **Anchor-blind case (anchor counts 0/0/0 but `proseCounts` non-zero):** this IS a genuine revision of a prose-form SRS. Continue the pipeline and feed `data.prose` entries (section + text) to sd-author as the changeset.
+
+   > **Do NOT rely on `trace-impact --changeset` alone here.** It seeds from FR-/TC-/ERR_ ids found *inside* the changed text, and prose acceptance criteria carry none — a bullet like "a duplicate submission returns the original result" never names FR-003. Verified: a prose-only changeset resolves to `impacted: {}`. Instead pull the distinctive nouns out of the changed bullets and pass them as keywords:
+   > ```
+   > node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs trace-impact --feature <feature> --keywords "idempotency,cancel"
+   > ```
+   > On the same change that `--changeset` missed entirely, `--keywords "idempotency,cancel"` resolved FR-003, TC-003, the error code, the implementing task and its file. Use `--changeset` when the SRS is anchored (ids in the text) and `--keywords` when it is prose; run both and union the results if unsure.
 
 2. **Resolve impact**
    Write the changeset JSON to a temp file, then:
@@ -32,7 +38,7 @@ Input: `$ARGUMENTS` (new SRS file path). Change only what changed — the tracea
    node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs trace-impact \
      --changeset <changeset.json>
    ```
-   Returns `{ impacted: { fr, tc, errors, tasks }, reasons }`. Use `--ids "FR-007,TC-012"` or `--keywords "callback,timeout"` for ad-hoc changesets.
+   Returns `{ impacted: { fr, tc, errors, tasks, files }, reasons }`. `--ids "FR-007,TC-012"` and `--keywords "callback,timeout"` are the direct forms — for a prose-form SRS `--keywords` is the ONLY one that resolves anything (see the anchor-blind note in step 1).
 
 3. **Update SD delta only**
    - Re-run `sd-skeleton --srs <srs_v2.md> --force` (the `--force` is required — sd-skeleton refuses to overwrite an existing SD otherwise; resync deliberately re-derives the impacted deterministic sections: §5.1 FR, §12.2 errors, §13.2 TC rows for impacted IDs).
@@ -41,28 +47,25 @@ Input: `$ARGUMENTS` (new SRS file path). Change only what changed — the tracea
 4. **Gate — wait for review**
    Report SD delta diff + remaining `TODO:MANUAL-REVIEW` count — count with `grep -cE '\*\*TODO:MANUAL-REVIEW\*\*'` (the bold marker form, including one embedded mid-line in a table cell or list item), never a bare string grep (that also matches the preamble banner, the Pass-2 summary line, and revision-history prose — none of which bold the phrase). **Refuse to cascade tasks while any TODO marker remains.**
 
-5. **Cascade tasks** (AI op → CLI, not MCP — MCP fails on a stale-cached provider)
+5. **Cascade tasks** (AI op — cascades the changeset summary onto downstream tasks)
+   Both flags are required; `--from=<id>` does NOT work (the parser wants a space) and without `--tag` it resolves tag `undefined`.
    ```
-   node ${CLAUDE_PLUGIN_ROOT}/bin/task-master update --from=<lowest impacted task id> \
-     --prompt="<changeset summary>"
+   node ${CLAUDE_PLUGIN_ROOT}/bin/task-master update --from <lowest impacted task id> \
+     --tag <feature> --prompt "<changeset summary>"
    ```
-   Only if the CLI genuinely errors on a missing provider/key do you ask the user to run it in their terminal.
 
 6. **Re-align ALL impacted tasks to the new spec — not just `done` ones.**
    For each task ID in `impacted.tasks`, by current status:
-   - **`done`** → `set_task_status --status=review` (re-verify against the new SD).
+   - **`done`** → `task-set-status --status review` (re-verify against the new SD).
    - **`in-progress`** → **STOP and warn**: this task is being implemented RIGHT NOW against the OLD spec. Surface it to the user, set it back to `pending`, and make sure its executor re-reads the updated SD section before continuing — otherwise it ships stale behavior silently. This is the W2 hole: an in-flight task is the most dangerous to leave un-flagged.
    - **`pending`** → leave `pending` (it hasn't been built yet, so it will pick up the new SD naturally), but **list it** in the resync report so the user sees the full blast radius.
+   ```bash
+   E=${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs
+   node $E task-set-status --tag <feature> --id <id> --status review    # each impacted `done` task
+   node $E task-set-status --tag <feature> --id <id> --status pending   # each impacted `in-progress` task (+ warn the user)
+   node $E task-add --tag <feature> --title "<t>"                       # net-new FR with no existing task
    ```
-   mcp__task-master-ai__set_task_status --id=<id> --status=review     # for each impacted `done` task
-   mcp__task-master-ai__set_task_status --id=<id> --status=pending    # for each impacted `in-progress` task (+ warn the user)
-   ```
-   Net-new FRs in the CHANGESET with no existing task → create one (`mcp__task-master-ai__add_task`, `tag: "<feature>"`).
-
-   > **MCP tool missing → use the engine CLI, don't stop.** A project-level `.mcp.json` can shadow the bundled server with a
-   > core-tier `task-master-ai` that exposes no `add_task`. Deterministic twins (same tasks.json, no AI):
-   > `node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs task-set-status --tag <feature> --id <id> --status review` ·
-   > `… task-add --tag <feature> --title "<t>"`. Full mapping: the Task Master note in `/sf:phase`.
+   Deterministic state ops on `.taskmaster/tasks/tasks.json` — no model, no MCP.
    Report the impacted set grouped by prior status so nothing implemented-against-old-spec slips through.
 
 7. **Regenerate impacted checklist entries**

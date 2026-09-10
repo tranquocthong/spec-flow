@@ -14,20 +14,7 @@
 
 ---
 
-## Document Information
-
-| Field        | Value                            |
-|--------------|----------------------------------|
-| **Document ID**  | SD-[YYYY]-[NNN]              |
-| **Version**      | 1.0.0                        |
-| **Status**       | Draft / In Review / Approved |
-| **Created**      | YYYY-MM-DD                   |
-| **Last Updated** | YYYY-MM-DD                   |
-| **Author(s)**    | [Tên] – [Team/Role]          |
-| **Reviewer(s)**  | [Tên] – [Team/Role]          |
-| **Approver(s)**  | [Tên] – [Team/Role]          |
-
-### Revision History
+## Revision History
 
 | Version | Date       | Author | Changes                    |
 |---------|------------|--------|----------------------------|
@@ -36,57 +23,13 @@
 
 ---
 
-## Table of Contents
-
-{/*
-  Cấu trúc Part-based: nhóm sections theo concern.
-  Tùy loại thiết kế, giữ / xóa Part phù hợp:
-  - API Service → Giữ Part B (API Design), bỏ Part C (Internal Process Design)
-  - Internal Process → Giữ Part C, bỏ Part B
-  - Hybrid → Giữ cả Part B + Part C
-*/}
-
-**Part A — Context & Foundation**
-
-1. [Overview](#1-overview)
-2. [Background & Problem Statement](#2-background--problem-statement)
-3. [Goals & Non-Goals](#3-goals--non-goals)
-4. [Stakeholders](#4-stakeholders)
-5. [Requirements](#5-requirements)
-6. [Architecture Overview](#6-architecture-overview)
-7. [Database Design](#7-database-design)
-8. [Message Queue / Event Streaming](#8-message-queue--event-streaming)
-
-**Part B — API Design**
-
-9. [API Design](#9-api-design)
-    - 9.1 [Overview & Authentication](#91-overview--authentication)
-    - 9.2 [API Endpoints](#92-api-endpoints)
-    - 9.3 [Common Error Responses](#93-common-error-responses)
-    - 9.4 [Sequence Diagrams](#94-sequence-diagrams)
-
-**Part C — Internal Process Design**
-
-10. [Internal Process Design](#10-internal-process-design)
-    - 10.1 [Process Overview](#101-process-overview)
-    - 10.2 [Process Flow](#102-process-flow)
-    - 10.3 [Processing Rules & Business Logic](#103-processing-rules--business-logic)
-    - 10.4 [State Management](#104-state-management)
-    - 10.5 [Scheduling & Execution Configuration](#105-scheduling--execution-configuration)
-    - 10.6 [Input / Output Specification](#106-input--output-specification)
-    - 10.7 [Observability & Monitoring](#107-observability--monitoring)
-    - 10.8 [Sequence Diagrams](#108-sequence-diagrams)
-
-**Part D — Cross-cutting Concerns**
-
-11. [Security Considerations](#11-security-considerations)
-12. [Error Handling & Resilience](#12-error-handling--resilience)
-13. [Testing Strategy](#13-testing-strategy)
-14. [Risks & Mitigations](#14-risks--mitigations)
-15. [Open Questions](#15-open-questions)
-16. [Appendix: Glossary](#appendix-glossary)
-
----
+> **Numbering has deliberate gaps.** Sections 4, 8, 11 and 14 were removed after
+> measuring 34 shipped SDs (Stakeholders 1/34; Message Queue, Security
+> Considerations and Risks & Mitigations 0/34 each). The survivors KEEP their
+> original numbers: §X.Y is a stable identifier referenced 337 times inside
+> spec-flow and 1,496 times across already-shipped SDs, and the number-based
+> cross-checks in `lib/trace.cjs` (§5.1, §5.2, §10.4, §12.2, §13.2) key on them.
+> Renumbering would buy tidiness and cost 1,833 references. Do not renumber.
 
 ## 1. Overview
 
@@ -163,20 +106,6 @@
 
 ---
 
-## 4. Stakeholders
-
-| Role                | Name / Team        | Responsibility                      |
-|---------------------|--------------------|-------------------------------------|
-| Product Owner       | [Tên]              | Phê duyệt yêu cầu, acceptance       |
-| Tech Lead           | [Tên]              | Review kiến trúc, approve design    |
-| Backend Developer   | [Tên / Team]       | Implement backend services          |
-| Frontend Developer  | [Tên / Team]       | Implement UI                        |
-| QA Engineer         | [Tên / Team]       | Test plan, UAT                      |
-| DevOps / SRE        | [Tên / Team]       | Deployment, infrastructure          |
-| Security            | [Tên / Team]       | Security review                     |
-
----
-
 ## 5. Requirements
 
 ### 5.1 Functional Requirements
@@ -249,7 +178,7 @@ graph TB
 
 ---
 
-## 7. Database Design
+## 7. Data Model
 
 {/* Nếu không có thay đổi database → XÓA toàn bộ section này */}
 
@@ -326,63 +255,6 @@ erDiagram
 
 ---
 
-## 8. Message Queue / Event Streaming
-
-{/* Nếu không dùng message queue → XÓA toàn bộ section này */}
-
-### 8.1 Overview
-
-**Technology:** `Apache Kafka` | `RabbitMQ` | `AWS SQS/SNS` | `Redis Streams`
-
-```mermaid
-flowchart LR
-    Producer[Service A\nProducer]
-    Topic1[[topic.event.created]]
-    Topic2[[topic.event.processed]]
-    Consumer1[Service B\nConsumer]
-    Consumer2[Service C\nConsumer]
-
-    Producer -->|publish| Topic1
-    Topic1 -->|subscribe| Consumer1
-    Consumer1 -->|publish| Topic2
-    Topic2 -->|subscribe| Consumer2
-```
-
-### 8.2 Topics / Queues
-
-| Topic / Queue Name     | Producer    | Consumer(s)         | Retention | Partitions | Description              |
-|------------------------|-------------|---------------------|-----------|------------|--------------------------|
-| `topic.event.created`  | Service A   | Service B, C        | 7 ngày    | 6          | [Mô tả sự kiện]          |
-| `topic.event.processed`| Service B   | Service C           | 3 ngày    | 3          | [Mô tả sự kiện]          |
-
-### 8.3 Message Schema
-
-**Topic: `topic.event.created`**
-
-```json
-{
-  "eventId": "uuid-v4",
-  "eventType": "event.created",
-  "version": "1.0",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "source": "service-a",
-  "payload": {
-    "id": 123,
-    "field1": "value1",
-    "field2": "value2"
-  }
-}
-```
-
-### 8.4 Consumer Configuration
-
-| Consumer Group          | Topic                  | Processing Mode  | Retry Policy              |
-|-------------------------|------------------------|------------------|---------------------------|
-| `service-b-consumer`    | `topic.event.created`  | At-least-once    | 3 retries, exponential    |
-| `service-c-consumer`    | `topic.event.processed`| Exactly-once     | DLQ after 3 failures      |
-
----
-
 ## 9. API Design
 
 {/* Nếu loại thiết kế là "Internal Process" → XÓA toàn bộ Part B (section này) */}
@@ -454,88 +326,12 @@ flowchart LR
 
 ---
 
-#### `GET /api/v1/{resource}/{id}`
-
-**Mô tả:** [Mô tả chức năng]
-
-**Authorization:** `Required` — Role: `[user / admin]`
-
-**Path Parameters:**
-
-| Parameter | Type     | Required | Description       |
-|-----------|----------|----------|-------------------|
-| `id`      | `integer`| Yes      | ID của resource   |
-
-**Query Parameters:**
-
-| Parameter  | Type      | Required | Default | Description              |
-|------------|-----------|----------|---------|--------------------------|
-| `include`  | `string`  | No       | —       | Comma-separated relations|
-| `fields`   | `string`  | No       | —       | Sparse fieldsets         |
-
-**Response — 200 OK:**
-
-```json
-{
-  "success": true,
-  "data": {
-    "id": 456,
-    "field1": "string",
-    "field2": 123,
-    "createdAt": "2024-01-01T00:00:00Z",
-    "updatedAt": "2024-01-01T00:00:00Z"
-  }
-}
-```
-
----
-
-#### `GET /api/v1/{resource}`
-
-**Mô tả:** Lấy danh sách resource với pagination
-
-**Query Parameters:**
-
-| Parameter  | Type      | Required | Default | Description              |
-|------------|-----------|----------|---------|--------------------------|
-| `page`     | `integer` | No       | 1       | Số trang                 |
-| `limit`    | `integer` | No       | 20      | Số item / trang (max 100)|
-| `sort`     | `string`  | No       | `-createdAt` | Field sort, prefix `-` = DESC |
-| `filter`   | `string`  | No       | —       | Filter expression        |
-| `search`   | `string`  | No       | —       | Tìm kiếm full-text       |
-
-**Response — 200 OK:**
-
-```json
-{
-  "success": true,
-  "data": [],
-  "pagination": {
-    "page": 1,
-    "limit": 20,
-    "total": 100,
-    "totalPages": 5
-  }
-}
-```
-
----
-
-#### `PUT /api/v1/{resource}/{id}`
-
-**Mô tả:** Cập nhật resource (full update)
-
-{/* Tương tự POST, mô tả request body và responses */}
-
----
-
-#### `DELETE /api/v1/{resource}/{id}`
-
-**Mô tả:** Xóa resource (soft delete)
-
-**Response — 204 No Content** (không có body)
-
-**Lưu ý:** Sử dụng soft delete — set `deleted_at = NOW()`, không xóa khỏi database.
+> **One worked endpoint above is the pattern; repeat that shape per endpoint.**
+> The full CRUD catalogue (GET one, GET list, PUT, DELETE) used to be spelled out
+> here and cost ~80 template lines that sd-author read on every ingest without
+> learning anything new from instances 2-5. Document only the endpoints this
+> feature actually exposes, each with: path + auth, request schema, response
+> schema, and the error codes it can return (cross-referenced to §12.2).
 
 ### 9.3 Common Error Responses
 
@@ -600,33 +396,7 @@ sequenceDiagram
     ServiceB->>DB: Update related data
 ```
 
-#### 9.4.2 [Flow 2: Tên Luồng Thứ Hai]
-
-{/* Ví dụ: Async processing, error flow, v.v. */}
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant ServiceA as Service A
-    participant MQ as Message Queue
-    participant ServiceB as Service B
-    participant DB as Database
-
-    Note over ServiceA,MQ: Async Flow
-    ServiceA->>MQ: Publish message
-    MQ-->>ServiceB: Deliver message
-
-    alt Success
-        ServiceB->>DB: Process & Save
-        ServiceB-->>MQ: ACK
-    else Failure
-        ServiceB-->>MQ: NACK
-        MQ->>MQ: Retry (max 3 times)
-        MQ->>MQ: Move to DLQ
-    end
-```
-
----
+> One sequence diagram is the pattern. Add one per non-trivial flow this feature introduces — do not diagram CRUD.
 
 ## 10. Internal Process Design
 
@@ -816,77 +586,7 @@ sequenceDiagram
     Note over Worker: Log execution metrics (duration, processed count, error count)
 ```
 
-#### 10.8.2 [Flow 2: Error / Rollback Flow]
-
-{/* Mô tả luồng xử lý khi có lỗi, rollback, retry, v.v. */}
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Worker as Worker / Processor
-    participant DB as Database
-    participant DLQ as Dead Letter Queue
-
-    Worker->>DB: Process record
-    DB-->>Worker: Error (timeout / constraint violation)
-
-    alt Retryable error
-        Worker->>Worker: Retry with backoff (attempt 1..N)
-        alt Retry success
-            Worker->>DB: Save result
-        else Max retries exceeded
-            Worker->>DLQ: Move to DLQ
-            Worker->>Worker: Log error + continue batch
-        end
-    else Fatal error
-        Worker->>Worker: Abort execution
-        Worker->>Worker: Alert on-call
-    end
-```
-
----
-
-## 11. Security Considerations
-
-{/* Section này áp dụng cho MỌI loại thiết kế (API Service, Internal Process, Hybrid) */}
-
-### 11.1 Authentication & Authorization
-
-- **Cơ chế xác thực:** [JWT / OAuth 2.0 / API Key]
-- **Token expiry:** Access token [15 phút], Refresh token [7 ngày]
-- **RBAC:** Mô tả các role và permission liên quan
-
-| Role     | Permission                              |
-|----------|-----------------------------------------|
-| `admin`  | Full CRUD                               |
-| `user`   | Read + Create own resources             |
-| `viewer` | Read only                               |
-
-### 11.2 Input Validation & Sanitization
-
-- [ ] Validate tất cả input từ client (type, length, format)
-- [ ] Sanitize input để ngăn XSS
-- [ ] Parameterized queries để ngăn SQL Injection
-- [ ] Rate limiting tại API Gateway
-
-### 11.3 Data Security
-
-- [ ] Dữ liệu nhạy cảm được mã hóa at-rest (AES-256)
-- [ ] Dữ liệu truyền tải qua HTTPS/TLS 1.3
-- [ ] PII được mask trong logs
-- [ ] Không log sensitive data (password, token, card number)
-
-### 11.4 Audit Logging
-
-{/* Các action nào cần ghi audit log? */}
-
-| Action              | Actor  | Log Level | Retention  |
-|---------------------|--------|-----------|------------|
-| Create resource     | User   | INFO      | 90 ngày    |
-| Delete resource     | Admin  | WARN      | 1 năm      |
-| Auth failure        | System | WARN      | 30 ngày    |
-
----
+> One sequence diagram is the pattern. Add one per non-trivial internal flow — scheduler tick, retry/compensation, state transition.
 
 ## 12. Error Handling & Resilience
 
@@ -991,18 +691,6 @@ sequenceDiagram
 | TC-005 | [Concurrency]               | Multiple concurrent requests            | No data corruption            |
 | TC-006 | [Failure / Recovery]        | [Dependency down / crash mid-process]   | [Expected recovery behavior]  |
 | TC-007 | [Idempotency]               | Same request twice                      | No duplicate side effects     |
-
----
-
-## 14. Risks & Mitigations
-
-| ID    | Risk                                        | Probability | Impact  | Mitigation                                 | Owner       |
-|-------|---------------------------------------------|-------------|---------|-------------------------------------------|-------------|
-| R-001 | [Database migration fails on production]    | Low         | High    | Test migration on staging, prepare rollback | DBA         |
-| R-002 | [Third-party API unavailable]               | Medium      | Medium  | Implement circuit breaker + fallback       | Backend Dev |
-| R-003 | [Performance degradation under peak load]   | Medium      | High    | Load test before release, auto-scaling     | DevOps      |
-| R-004 | [Data inconsistency in async processing]    | Low         | High    | Idempotency key, exactly-once semantics    | Backend Dev |
-| R-005 | [Security vulnerability in new endpoint]    | Low         | High    | Security review, penetration testing       | Security    |
 
 ---
 

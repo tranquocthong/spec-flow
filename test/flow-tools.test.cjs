@@ -1269,7 +1269,7 @@ test('REGRESSION checklist-gen: auth detection is scoped to the feature\'s decla
   assert.ok(r.data.warnings.some((w) => /scoped to repo "svc-plain"/.test(w)), 'warning names the scoped repo');
 });
 
-test('REGRESSION checklist-gen: no SD §7 Database Design section → skips config.db/redis and cleanup', () => {
+test('REGRESSION checklist-gen: no SD §7 Data Model section → skips config.db/redis and cleanup', () => {
   const dir = tmpProject();
   initProject(dir);
   const sdDir = path.join(dir, '.spec-flow', 'specs', 'demo');
@@ -1291,7 +1291,10 @@ test('REGRESSION checklist-gen: no SD §7 Database Design section → skips conf
   assert.doesNotMatch(yaml, /^\s*db:/m, 'no §7 → no db: block');
   assert.doesNotMatch(yaml, /^\s*redis:/m, 'no §7 → no redis: block');
   assert.doesNotMatch(yaml, /^cleanup:/m, 'no §7 → no cleanup: block');
-  assert.ok(r.data.warnings.some((w) => /no §7 Database Design section/.test(w)), 'warning explains why persistence config was skipped');
+  // §7 is detected by NUMBER (/^##\s*7\.?\s+/), so the heading text is free to be
+  // "Data Model" (what 25/34 real SDs call it) — the warning wording follows the
+  // template, the detection does not depend on it.
+  assert.ok(r.data.warnings.some((w) => /no §7 Data Model section/.test(w)), 'warning explains why persistence config was skipped');
 });
 
 test('REGRESSION checklist-gen: SD §7 explicitly says no database → skips config.db/redis and cleanup', () => {
@@ -1426,9 +1429,18 @@ test('REGRESSION #3 trace-impact: a changed FR reaches the implementing task via
   assert.equal(tl.ok, true, 'trace-link --fr ok');
   const tb = run(['trace-build', '--sd', path.join(sdDir, 'SD.md'), '--feature', 'demo'], dir);
   assert.equal(tb.ok, true);
-  // fr-task link must exist in the trace.
+  // The fr-task link is DERIVED from file-links.json (US-1), so it is deliberately
+  // NOT persisted in trace.json — the guarantee that matters is that a later
+  // /sf:change on FR-001 still reaches task 7, which it does through hydration.
   const trace = JSON.parse(fs.readFileSync(path.join(dir, '.spec-flow', 'specs', 'demo', 'trace.json'), 'utf8'));
-  assert.ok(trace.links.some(l => l.type === 'fr-task' && l.from === 'FR-001' && l.to === '7'), 'fr-task link emitted');
+  assert.ok(!trace.links.some(l => l.type === 'fr-task'),
+    'derived fr-task links must not be written to disk');
+  assert.ok(!trace.nodes.files && !trace.nodes.tasks,
+    'derived nodes.files / nodes.tasks must not be written to disk');
+  const imp = run(['trace-impact', '--feature', 'demo', '--ids', 'FR-001'], dir);
+  assert.equal(imp.ok, true, 'trace-impact ok');
+  assert.ok(imp.data.impacted.tasks.includes('7'),
+    'FR-001 must still resolve to task 7 via the hydrated fr-task link');
 
   const r = run(['trace-impact', '--feature', 'demo', '--ids', 'FR-001'], dir);
   assert.equal(r.ok, true);
@@ -3669,4 +3681,68 @@ test('REGRESSION checklist-gen: stdout is pure JSON even when the caller merges 
   assert.equal(lines.length, 1, 'exactly one line of output — no stray diagnostic prose');
   const parsed = JSON.parse(lines[0]);
   assert.equal(parsed.ok, true);
+});
+
+test('verify-code: multi-repo with no declared scope warns to run trace-repos', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  // Two sibling repos configured, but the feature never declared which it targets and
+  // its file-links hold BARE paths (no --repo prefix), so neither scoping signal fires.
+  // Old behaviour: silently scan every configured repo — on a 16-repo hub that is 64
+  // check rows, most of them failures from repos the feature never touched, with
+  // scope:null and no hint at all. Found by dogfooding on a real 16-repo project.
+  for (const r of ['svc-a', 'svc-b']) {
+    fs.mkdirSync(path.join(dir, '..', path.basename(dir) + '-' + r, 'src'), { recursive: true });
+  }
+  const cfgP = path.join(dir, '.spec-flow', 'config.json');
+  const cfg = JSON.parse(fs.readFileSync(cfgP, 'utf8'));
+  cfg.repos = {
+    'svc-a': path.join('..', path.basename(dir) + '-svc-a'),
+    'svc-b': path.join('..', path.basename(dir) + '-svc-b'),
+  };
+  fs.writeFileSync(cfgP, JSON.stringify(cfg));
+  fs.mkdirSync(path.join(dir, '.spec-flow', 'specs', 'demo'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.spec-flow', 'specs', 'demo', 'file-links.json'),
+    JSON.stringify({ links: [{ task: '1', fr: 'FR-001', file: 'src/bare.js' }] }));
+  const r = run(['verify-code', '--feature', 'demo'], dir);
+  assert.equal(r.ok, true);
+  assert.ok((r.data.scopeWarnings || []).some(w => /trace-repos/.test(w)),
+    'must name trace-repos --set as the fix, not silently scan every repo');
+});
+
+test('status-report: `status: passed` must be read from the STATUS LINE, not anywhere in the file', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  const sdDir = path.join(dir, '.spec-flow', 'specs', 'demo');
+  fs.mkdirSync(sdDir, { recursive: true });
+  // The ship gate (G3) is "do not ship unless VERIFICATION reads status: passed".
+  // A substring test over the whole file lets that gate be opened by a document
+  // that FORBIDS shipping, as long as the phrase appears anywhere in the prose --
+  // e.g. a correction note explaining that a false `status: passed` was replaced.
+  fs.writeFileSync(path.join(sdDir, 'VERIFICATION.md'), [
+    '# VERIFICATION — demo',
+    '',
+    'status: failed',
+    '',
+    '> Do NOT ship. 12 regression tests are red. This must not be recorded as `status: passed`.',
+  ].join('\n'));
+  const r = run(['status-report', '--feature', 'demo'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.verified, false,
+    'a file whose status line says failed must never read as verified');
+});
+
+test('status-report: verified-adhoc on the status line counts as verified', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  const sdDir = path.join(dir, '.spec-flow', 'specs', 'demo');
+  fs.mkdirSync(sdDir, { recursive: true });
+  // /sf:phase close-out step 4 accepts `verified-adhoc` for an out-of-loop live
+  // verify, so the gate must recognise it — anchoring on "passed" alone would
+  // silently reject every ad-hoc verified feature.
+  fs.writeFileSync(path.join(sdDir, 'VERIFICATION.md'),
+    '# VERIFICATION — demo\n\nstatus: verified-adhoc\n\n- TC-001: verified\n');
+  const r = run(['status-report', '--feature', 'demo'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.verified, true, 'verified-adhoc is a shippable status');
 });
