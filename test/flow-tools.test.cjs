@@ -3709,3 +3709,40 @@ test('verify-code: multi-repo with no declared scope warns to run trace-repos', 
   assert.ok((r.data.scopeWarnings || []).some(w => /trace-repos/.test(w)),
     'must name trace-repos --set as the fix, not silently scan every repo');
 });
+
+test('status-report: `status: passed` must be read from the STATUS LINE, not anywhere in the file', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  const sdDir = path.join(dir, '.spec-flow', 'specs', 'demo');
+  fs.mkdirSync(sdDir, { recursive: true });
+  // The ship gate (G3) is "do not ship unless VERIFICATION reads status: passed".
+  // A substring test over the whole file lets that gate be opened by a document
+  // that FORBIDS shipping, as long as the phrase appears anywhere in the prose --
+  // e.g. a correction note explaining that a false `status: passed` was replaced.
+  fs.writeFileSync(path.join(sdDir, 'VERIFICATION.md'), [
+    '# VERIFICATION — demo',
+    '',
+    'status: failed',
+    '',
+    '> Do NOT ship. 12 regression tests are red. This must not be recorded as `status: passed`.',
+  ].join('\n'));
+  const r = run(['status-report', '--feature', 'demo'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.verified, false,
+    'a file whose status line says failed must never read as verified');
+});
+
+test('status-report: verified-adhoc on the status line counts as verified', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  const sdDir = path.join(dir, '.spec-flow', 'specs', 'demo');
+  fs.mkdirSync(sdDir, { recursive: true });
+  // /sf:phase close-out step 4 accepts `verified-adhoc` for an out-of-loop live
+  // verify, so the gate must recognise it — anchoring on "passed" alone would
+  // silently reject every ad-hoc verified feature.
+  fs.writeFileSync(path.join(sdDir, 'VERIFICATION.md'),
+    '# VERIFICATION — demo\n\nstatus: verified-adhoc\n\n- TC-001: verified\n');
+  const r = run(['status-report', '--feature', 'demo'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.verified, true, 'verified-adhoc is a shippable status');
+});

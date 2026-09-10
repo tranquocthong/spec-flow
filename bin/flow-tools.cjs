@@ -38,6 +38,20 @@ const taskCli = require('../lib/task-cli.cjs');
 //  the verification gates in lib/verify.cjs; the task CLI in lib/task-cli.cjs.
 //  All are spread below — one flat command table, one dispatcher.
 // =====================================================================
+/**
+ * A VERIFICATION.md counts as verified only when its own `status:` LINE says so.
+ *
+ * This used to be a regex tested against the WHOLE file, i.e. a substring match: any
+ * document that merely MENTIONED the phrase read as verified -- including one whose
+ * status line says `failed` and whose prose says "this must not be recorded as
+ * status: passed". The ship guard (G3: do not ship unless VERIFICATION reads
+ * status: passed) could therefore be opened by a file explicitly forbidding the ship.
+ *
+ * `verified-adhoc` is accepted alongside `passed` because /sf:phase close-out step 4
+ * treats it as shippable (an out-of-loop live verify).
+ */
+const VERIFIED_STATUS_RE = /^[ \t]*status:[ \t]*(?:passed|verified-adhoc)\b/im;
+
 const commands = {
   ...maintenance,
   ...drift,
@@ -764,7 +778,7 @@ const commands = {
         nextStep = `${review} task(s) in \`review\` — \`/sf:phase ${featureName}\` picks them up first (re-run smoke → close if passed, re-attempt if failed). next_task alone skips review, so re-running the loop is correct, not a no-op.`;
       } else {
         let verified = false;
-        try { verified = /status:\s*passed/i.test(fs.readFileSync(verificationPath, 'utf8')); } catch {}
+        try { verified = VERIFIED_STATUS_RE.test(fs.readFileSync(verificationPath, 'utf8')); } catch {}
         // Shipped is the ladder's terminal rung. Without it `verified` was the last
         // one, so a feature that had already shipped kept being told to ship — the
         // re-anchor hook repeated that instruction every turn, forever, with no
@@ -1422,7 +1436,7 @@ const commands = {
     if (verifPath && fs.existsSync(verifPath)) {
       try {
         const vc = fs.readFileSync(verifPath, 'utf8');
-        verified = /status:\s*passed/i.test(vc);
+        verified = VERIFIED_STATUS_RE.test(vc);
         const gm = vc.match(/^#{1,6}\s*(?:deferred|not[- ]verified[- ]live|live gaps?)\b.*$/im);
         if (gm) {
           const after = vc.slice(vc.indexOf(gm[0]) + gm[0].length);
