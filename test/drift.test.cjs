@@ -212,3 +212,29 @@ test('drift-check: resolves repo-qualified file-links paths through config.repos
     assert.equal(r.data.clean, true);
   });
 });
+
+test('drift-check: spec-not-evidenced must search WIDE before claiming a code is missing', () => {
+  driftProject(() => {
+    // The asymmetry that matters. A feature declares ERR_ALPHA and implements it in
+    // src/elsewhere.js — a file the executor never recorded via trace-link (real
+    // file-links stores are routinely incomplete). Scoped-only search then "proves"
+    // the code is missing when it plainly is not: verified against a shipped feature
+    // whose §12.2 code lived in 4 files absent from its own 28-entry file-links.
+    //
+    //   spec-not-evidenced -> ABSENCE must be proven, so search wide.
+    //   impl-not-specced   -> only code THIS feature wrote is relevant, so search narrow.
+    seedDrift(['ERR_ALPHA'], []);
+    fsD.writeFileSync(pathD.join('src', 'linked.js'), '// nothing interesting here');
+    fsD.writeFileSync(pathD.join('src', 'elsewhere.js'), "throw new AppError('ERR_ALPHA');");
+    fsD.writeFileSync(pathD.join('src', 'stranger.js'), "throw new AppError('ERR_OTHER_FEATURE');");
+    fsD.writeFileSync(pathD.join('.spec-flow', 'specs', 'f', 'file-links.json'),
+      JSON.stringify({ links: [{ task: '1', fr: 'FR-001', file: 'src/linked.js' }] }));
+    const r = drift['drift-check']({ feature: 'f' });
+    assert.equal(r.ok, true);
+    assert.ok(!r.data.drift.some(d => d.type === 'spec-not-evidenced'),
+      'ERR_ALPHA exists in src/elsewhere.js — must NOT be reported missing');
+    assert.deepEqual(r.data.evidencedErrorCodes, ['ERR_ALPHA']);
+    assert.ok(!r.data.drift.some(d => d.code === 'ERR_OTHER_FEATURE'),
+      "a stranger's code outside file-links must NOT be attributed to this feature");
+  });
+});
