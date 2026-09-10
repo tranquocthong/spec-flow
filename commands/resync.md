@@ -41,28 +41,24 @@ Input: `$ARGUMENTS` (new SRS file path). Change only what changed — the tracea
 4. **Gate — wait for review**
    Report SD delta diff + remaining `TODO:MANUAL-REVIEW` count — count with `grep -cE '\*\*TODO:MANUAL-REVIEW\*\*'` (the bold marker form, including one embedded mid-line in a table cell or list item), never a bare string grep (that also matches the preamble banner, the Pass-2 summary line, and revision-history prose — none of which bold the phrase). **Refuse to cascade tasks while any TODO marker remains.**
 
-5. **Cascade tasks** (AI op → CLI, not MCP — MCP fails on a stale-cached provider)
+5. **Cascade tasks** (AI op — cascades the changeset summary onto downstream tasks)
    ```
    node ${CLAUDE_PLUGIN_ROOT}/bin/task-master update --from=<lowest impacted task id> \
      --prompt="<changeset summary>"
    ```
-   Only if the CLI genuinely errors on a missing provider/key do you ask the user to run it in their terminal.
 
 6. **Re-align ALL impacted tasks to the new spec — not just `done` ones.**
    For each task ID in `impacted.tasks`, by current status:
-   - **`done`** → `set_task_status --status=review` (re-verify against the new SD).
+   - **`done`** → `task-set-status --status review` (re-verify against the new SD).
    - **`in-progress`** → **STOP and warn**: this task is being implemented RIGHT NOW against the OLD spec. Surface it to the user, set it back to `pending`, and make sure its executor re-reads the updated SD section before continuing — otherwise it ships stale behavior silently. This is the W2 hole: an in-flight task is the most dangerous to leave un-flagged.
    - **`pending`** → leave `pending` (it hasn't been built yet, so it will pick up the new SD naturally), but **list it** in the resync report so the user sees the full blast radius.
+   ```bash
+   E=${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs
+   node $E task-set-status --tag <feature> --id <id> --status review    # each impacted `done` task
+   node $E task-set-status --tag <feature> --id <id> --status pending   # each impacted `in-progress` task (+ warn the user)
+   node $E task-add --tag <feature> --title "<t>"                       # net-new FR with no existing task
    ```
-   mcp__task-master-ai__set_task_status --id=<id> --status=review     # for each impacted `done` task
-   mcp__task-master-ai__set_task_status --id=<id> --status=pending    # for each impacted `in-progress` task (+ warn the user)
-   ```
-   Net-new FRs in the CHANGESET with no existing task → create one (`mcp__task-master-ai__add_task`, `tag: "<feature>"`).
-
-   > **MCP tool missing → use the engine CLI, don't stop.** A project-level `.mcp.json` can shadow the bundled server with a
-   > core-tier `task-master-ai` that exposes no `add_task`. Deterministic twins (same tasks.json, no AI):
-   > `node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs task-set-status --tag <feature> --id <id> --status review` ·
-   > `… task-add --tag <feature> --title "<t>"`. Full mapping: the Task Master note in `/sf:phase`.
+   Deterministic state ops on `.taskmaster/tasks/tasks.json` — no model, no MCP.
    Report the impacted set grouped by prior status so nothing implemented-against-old-spec slips through.
 
 7. **Regenerate impacted checklist entries**
