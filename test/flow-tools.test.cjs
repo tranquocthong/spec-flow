@@ -3682,3 +3682,30 @@ test('REGRESSION checklist-gen: stdout is pure JSON even when the caller merges 
   const parsed = JSON.parse(lines[0]);
   assert.equal(parsed.ok, true);
 });
+
+test('verify-code: multi-repo with no declared scope warns to run trace-repos', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  // Two sibling repos configured, but the feature never declared which it targets and
+  // its file-links hold BARE paths (no --repo prefix), so neither scoping signal fires.
+  // Old behaviour: silently scan every configured repo — on a 16-repo hub that is 64
+  // check rows, most of them failures from repos the feature never touched, with
+  // scope:null and no hint at all. Found by dogfooding on a real 16-repo project.
+  for (const r of ['svc-a', 'svc-b']) {
+    fs.mkdirSync(path.join(dir, '..', path.basename(dir) + '-' + r, 'src'), { recursive: true });
+  }
+  const cfgP = path.join(dir, '.spec-flow', 'config.json');
+  const cfg = JSON.parse(fs.readFileSync(cfgP, 'utf8'));
+  cfg.repos = {
+    'svc-a': path.join('..', path.basename(dir) + '-svc-a'),
+    'svc-b': path.join('..', path.basename(dir) + '-svc-b'),
+  };
+  fs.writeFileSync(cfgP, JSON.stringify(cfg));
+  fs.mkdirSync(path.join(dir, '.spec-flow', 'specs', 'demo'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.spec-flow', 'specs', 'demo', 'file-links.json'),
+    JSON.stringify({ links: [{ task: '1', fr: 'FR-001', file: 'src/bare.js' }] }));
+  const r = run(['verify-code', '--feature', 'demo'], dir);
+  assert.equal(r.ok, true);
+  assert.ok((r.data.scopeWarnings || []).some(w => /trace-repos/.test(w)),
+    'must name trace-repos --set as the fix, not silently scan every repo');
+});
