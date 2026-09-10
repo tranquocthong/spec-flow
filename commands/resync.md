@@ -42,9 +42,10 @@ Input: `$ARGUMENTS` (new SRS file path). Change only what changed — the tracea
    Report SD delta diff + remaining `TODO:MANUAL-REVIEW` count — count with `grep -cE '\*\*TODO:MANUAL-REVIEW\*\*'` (the bold marker form, including one embedded mid-line in a table cell or list item), never a bare string grep (that also matches the preamble banner, the Pass-2 summary line, and revision-history prose — none of which bold the phrase). **Refuse to cascade tasks while any TODO marker remains.**
 
 5. **Cascade tasks** (AI op — cascades the changeset summary onto downstream tasks)
+   Both flags are required; `--from=<id>` does NOT work (the parser wants a space) and without `--tag` it resolves tag `undefined`.
    ```
-   node ${CLAUDE_PLUGIN_ROOT}/bin/task-master update --from=<lowest impacted task id> \
-     --prompt="<changeset summary>"
+   node ${CLAUDE_PLUGIN_ROOT}/bin/task-master update --from <lowest impacted task id> \
+     --tag <feature> --prompt "<changeset summary>"
    ```
 
 6. **Re-align ALL impacted tasks to the new spec — not just `done` ones.**

@@ -1269,7 +1269,7 @@ test('REGRESSION checklist-gen: auth detection is scoped to the feature\'s decla
   assert.ok(r.data.warnings.some((w) => /scoped to repo "svc-plain"/.test(w)), 'warning names the scoped repo');
 });
 
-test('REGRESSION checklist-gen: no SD §7 Database Design section → skips config.db/redis and cleanup', () => {
+test('REGRESSION checklist-gen: no SD §7 Data Model section → skips config.db/redis and cleanup', () => {
   const dir = tmpProject();
   initProject(dir);
   const sdDir = path.join(dir, '.spec-flow', 'specs', 'demo');
@@ -1291,7 +1291,10 @@ test('REGRESSION checklist-gen: no SD §7 Database Design section → skips conf
   assert.doesNotMatch(yaml, /^\s*db:/m, 'no §7 → no db: block');
   assert.doesNotMatch(yaml, /^\s*redis:/m, 'no §7 → no redis: block');
   assert.doesNotMatch(yaml, /^cleanup:/m, 'no §7 → no cleanup: block');
-  assert.ok(r.data.warnings.some((w) => /no §7 Database Design section/.test(w)), 'warning explains why persistence config was skipped');
+  // §7 is detected by NUMBER (/^##\s*7\.?\s+/), so the heading text is free to be
+  // "Data Model" (what 25/34 real SDs call it) — the warning wording follows the
+  // template, the detection does not depend on it.
+  assert.ok(r.data.warnings.some((w) => /no §7 Data Model section/.test(w)), 'warning explains why persistence config was skipped');
 });
 
 test('REGRESSION checklist-gen: SD §7 explicitly says no database → skips config.db/redis and cleanup', () => {

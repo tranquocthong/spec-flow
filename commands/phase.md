@@ -60,7 +60,7 @@ node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs route --sd .spec-flow/specs/<featu
 
 Deterministic per-FR complexity (1–10) — this is the **only** complexity signal the loop uses:
 - **1-3 → fast**: straight to the executor.
-- **4-7 → expand**: `task-master expand --id=<id>` — same three-phase handoff as `parse-prd` (prints a `GenerationSpec`, you generate the subtasks, `tasks-import` persists them). Then run each subtask as fast.
+- **4-7 → expand**: `task-master expand --id <id> --tag <feature>` — same three-phase handoff as `parse-prd` (prints a `GenerationSpec`, you generate the subtasks, `tasks-import` persists them). Then run each subtask as fast. **Both flags are required and `--id=<id>` does NOT work** — the CLI's parser wants a space, and without `--tag` it resolves tag `undefined` and errors `ERR_TASK_NOT_FOUND`.
 - **8-10 → deep**: if the task touches an external integration, run `task-master research "<query>"` first (pass the SD risk row as context), then spawn **hybrid-executor** with the extra planning notes.
 
 ## Per-task loop
@@ -91,8 +91,10 @@ Deterministic per-FR complexity (1–10) — this is the **only** complexity sig
 
    **Optional narrative log — `config.phase.taskNotes` (default `false`).** Absent or `false` → **skip entirely**. `update-task --append` is one AI subprocess per task (measured 13.2 tasks/feature) producing only human-readable history — it is not the source of truth. Only when `true`:
    ```bash
-   node ${CLAUDE_PLUGIN_ROOT}/bin/task-master update-task --id=<id> --append --prompt="<files/approach/result>"
+   node ${CLAUDE_PLUGIN_ROOT}/bin/task-master update-task --id <id> --tag <feature> --append --prompt "<files/approach/result>"
    ```
+   **Both flags are required, and `--id=<id>` does NOT work** — the CLI's parser wants a
+   space, and without `--tag` it resolves tag `undefined` and errors `ERR_TASK_NOT_FOUND`.
    Non-blocking: on error surface it once and continue — never halt the loop over a history write.
 
 4. **Automated quality gate**
