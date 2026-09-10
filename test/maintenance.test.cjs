@@ -292,3 +292,46 @@ test('doctor: current-tag check is skipped entirely when the project has no .tas
     assert.equal(currentTagCheck(), undefined);
   });
 });
+
+// --- US-7: config.phase.taskNotes (opt-in per-task AI history) -------------
+// FR-034/FR-036, BL-15. `update-task --append` is one AI subprocess per task
+// (measured 13.2 tasks/feature = ~13 calls) and only produces human-readable
+// history — the disk facts are trace-link + task status. It must be OFF unless
+// the project explicitly asks for it, and an ABSENT key must read as false so
+// existing projects get the speedup without editing their config.
+
+test('init-project: seeds phase.taskNotes=false alongside confirmTasks', () => {
+  inTmp(() => {
+    const r = maintenance['init-project']({ stack: 'node' });
+    assert.equal(r.ok, true);
+    const cfg = JSON.parse(fs.readFileSync('.spec-flow/config.json', 'utf8'));
+    assert.equal(cfg.phase.confirmTasks, true, 'confirmTasks default unchanged');
+    assert.equal(cfg.phase.taskNotes, false, 'taskNotes must default to false');
+  });
+});
+
+test('init-project: upgrades a config that has no phase block at all', () => {
+  inTmp(() => {
+    fs.mkdirSync('.spec-flow', { recursive: true });
+    fs.writeFileSync('.spec-flow/config.json', JSON.stringify({ project: 'legacy', stack: 'node' }));
+    const r = maintenance['init-project']({ stack: 'node' });
+    assert.equal(r.ok, true);
+    const cfg = JSON.parse(fs.readFileSync('.spec-flow/config.json', 'utf8'));
+    assert.equal(cfg.phase.taskNotes, false);
+  });
+});
+
+test('init-project: a pre-existing phase block keeps its own confirmTasks choice', () => {
+  inTmp(() => {
+    fs.mkdirSync('.spec-flow', { recursive: true });
+    fs.writeFileSync('.spec-flow/config.json',
+      JSON.stringify({ project: 'legacy', stack: 'node', phase: { confirmTasks: false } }));
+    const r = maintenance['init-project']({ stack: 'node' });
+    assert.equal(r.ok, true);
+    const cfg = JSON.parse(fs.readFileSync('.spec-flow/config.json', 'utf8'));
+    assert.equal(cfg.phase.confirmTasks, false, 'must not clobber an explicit user choice');
+    // BL-15: absent taskNotes reads as false at the call site, so back-filling it
+    // here is optional — but it must never be back-filled as true.
+    assert.notEqual(cfg.phase.taskNotes, true);
+  });
+});
