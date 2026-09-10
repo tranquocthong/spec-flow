@@ -34,7 +34,7 @@ describing the meaning of each state>
 
 ## **4. User Stories**
 
-**US-1: \<Story name>**
+### US-1: \<Story name>
 
 - As a \<role>,
 - I want to \<action>,
@@ -42,13 +42,22 @@ describing the meaning of each state>
 
 #### Acceptance Criteria
 
-\<List the conditions that must be true for this story to be considered
-complete; write them so QA can verify each one independently>
+List the conditions that must be true for this story to be considered complete.
+Write each one as its own bullet, phrased so QA can verify it independently —
+**each bullet becomes one FR row plus its TC row**, so a paragraph here means a
+requirement the harvest cannot see. Replace these examples:
+
+- The operator can submit the form and receives a confirmation within 2 seconds.
+- A submission that fails validation is rejected with a field-level error message.
+- A duplicate submission within the idempotency window returns the original result.
 
 #### Edge Cases
 
-\<List uncommon or boundary-case scenarios that QA should also test for this
-story>
+Uncommon or boundary scenarios QA should also cover. One bullet each — these
+become TC rows too. Replace these examples:
+
+- The upstream service times out mid-submission.
+- The same record is submitted concurrently from two sessions.
 
 ## **5. Functional Requirements**
 
@@ -90,12 +99,12 @@ can be traced to test cases.>
 
 \<Table of NFR targets and how they will be measured>
 
-| Requirement | Target | Measurement method |
-| --- | --- | --- |
-| Response time (p99) |  |  |
-| Throughput |  |  |
-| Authentication / authorisation |  |  |
-| Data encryption |  |  |
+| ID | Requirement | Target | Measurement method |
+| --- | --- | --- | --- |
+| NFR-1 | Response time (p99) |  |  |
+| NFR-2 | Throughput |  |  |
+| NFR-3 | Authentication / authorisation |  |  |
+| NFR-4 | Data encryption |  |  |
 
 ### **6.2. Error & Notification Messages**
 
