@@ -335,3 +335,38 @@ test('init-project: a pre-existing phase block keeps its own confirmTasks choice
     assert.notEqual(cfg.phase.taskNotes, true);
   });
 });
+
+test('doctor verify-integrity: a TODO inside a YAML comment is not an unfilled test', () => {
+  inTmp(() => {
+    maintenance['init-project']({ stack: 'node' });
+    const d = path.join('.spec-flow', 'specs', 'demo');
+    fs.mkdirSync(d, { recursive: true });
+    // doctor resolves the active feature from the trace mirror, so seed both.
+    fs.writeFileSync(path.join(d, 'SD.md'), '# Solution Design: demo\n\n## 1. Overview\n');
+    const trace = { feature: 'demo', nodes: { fr: [], tc: [], nfr: [], errors: [], states: [] }, links: [] };
+    fs.writeFileSync(path.join(d, 'trace.json'), JSON.stringify(trace));
+    fs.writeFileSync(path.join('.spec-flow', 'trace.json'), JSON.stringify(trace));
+    fs.writeFileSync(path.join(d, 'VERIFICATION.md'), 'status: passed\n\n- TC-001: verified\n');
+    // The comment explains why the scaffold was NOT filled — it is documentation,
+    // not an unfilled test. lint-checklist and checklist-status both strip comments
+    // before counting; doctor did not, so writing about TODOs failed the gate.
+    fs.writeFileSync(path.join(d, 'CHECKLIST.yaml'), [
+      '# checklist-gen emits `GET /api/v1/TODO` stubs for non-HTTP features.',
+      'config:',
+      '  base_url: "http://localhost:8080"',
+      'suites:',
+      '  - id: suite-1',
+      '    name: "s"',
+      '    tags: [regression]',
+      '    tests:',
+      '      - id: TC-001',
+      '        name: "t"',
+      '        tags: [regression, no-verify]',
+    ].join('\n'));
+    const r = maintenance.doctor({});
+    const vi = (r.data.checks || []).find(c => c.name === 'verify-integrity');
+    assert.ok(vi, 'verify-integrity check must run');
+    assert.notEqual(vi.status, 'fail',
+      'a TODO in a comment must not read as an unfilled test');
+  });
+});
