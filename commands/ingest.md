@@ -131,13 +131,7 @@ With a file path given, skip Mode 0 and go straight to the Steps.
       `status-report --feature <feature>`) before assuming tasks exist —
       running `use-tag` on an empty tag succeeds silently and proves nothing was seeded.
 
-   `analyze-complexity` (role `research`):
-   ```bash
-   node ${CLAUDE_PLUGIN_ROOT}/bin/task-master models --set-research "<configured>" --claude-code
-   trap "node ${CLAUDE_PLUGIN_ROOT}/bin/task-master models --set-research '<previous>' --claude-code" EXIT
-   node ${CLAUDE_PLUGIN_ROOT}/bin/task-master analyze-complexity --tag <feature> --research
-   ```
-   **The agent CAN run these** (same as every other CLI AI op in `/sf:phase`): the keyless `claude-code` provider reaches the Claude binary via `CLAUDE_CODE_EXECPATH` (set by the host), so `which claude` printing nothing on the Bash PATH does *not* mean it can't run. Use the **CLI** form above (reads `.taskmaster/config.json` fresh); the MCP `parse_prd` tool can fail on a stale-cached provider (see the Task Master note in `/sf:phase`). Only if the CLI genuinely errors on a missing provider/key do you ask the user to run it in their terminal.
+   **The agent CAN run this** (same as every other CLI AI op in `/sf:phase`): the keyless `claude-code` provider reaches the Claude binary via `CLAUDE_CODE_EXECPATH` (set by the host), so `which claude` printing nothing on the Bash PATH does *not* mean it can't run. Use the **CLI** form above (reads `.taskmaster/config.json` fresh); the MCP `parse_prd` tool can fail on a stale-cached provider (see the Task Master note in `/sf:phase`). Only if the CLI genuinely errors on a missing provider/key do you ask the user to run it in their terminal.
 
    **Backfill ingest (the feature was implemented BEFORE this SD existed):** `parse-prd` seeds EVERYTHING as `pending` — including scope that already ships — so a later `/sf:phase` could re-implement working code. After the shipped scope has passed `/sf:manual-test` (VERIFICATION.md exists), run:
    ```
