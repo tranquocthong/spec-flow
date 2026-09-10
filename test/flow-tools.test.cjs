@@ -1426,9 +1426,18 @@ test('REGRESSION #3 trace-impact: a changed FR reaches the implementing task via
   assert.equal(tl.ok, true, 'trace-link --fr ok');
   const tb = run(['trace-build', '--sd', path.join(sdDir, 'SD.md'), '--feature', 'demo'], dir);
   assert.equal(tb.ok, true);
-  // fr-task link must exist in the trace.
+  // The fr-task link is DERIVED from file-links.json (US-1), so it is deliberately
+  // NOT persisted in trace.json — the guarantee that matters is that a later
+  // /sf:change on FR-001 still reaches task 7, which it does through hydration.
   const trace = JSON.parse(fs.readFileSync(path.join(dir, '.spec-flow', 'specs', 'demo', 'trace.json'), 'utf8'));
-  assert.ok(trace.links.some(l => l.type === 'fr-task' && l.from === 'FR-001' && l.to === '7'), 'fr-task link emitted');
+  assert.ok(!trace.links.some(l => l.type === 'fr-task'),
+    'derived fr-task links must not be written to disk');
+  assert.ok(!trace.nodes.files && !trace.nodes.tasks,
+    'derived nodes.files / nodes.tasks must not be written to disk');
+  const imp = run(['trace-impact', '--feature', 'demo', '--ids', 'FR-001'], dir);
+  assert.equal(imp.ok, true, 'trace-impact ok');
+  assert.ok(imp.data.impacted.tasks.includes('7'),
+    'FR-001 must still resolve to task 7 via the hydrated fr-task link');
 
   const r = run(['trace-impact', '--feature', 'demo', '--ids', 'FR-001'], dir);
   assert.equal(r.ok, true);
