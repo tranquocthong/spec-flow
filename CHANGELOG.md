@@ -64,6 +64,18 @@ This also corrects a claim: the ~14 AI calls per feature credited to `phase.task
 - **`config.phase.taskNotes` defaults to `false`.** Projects that relied on per-task narrative history must set it to `true`; note that it never actually worked before Group 4.
 - **Four SD template sections are gone.** Existing SDs are unaffected — only newly generated ones follow the trimmed template, and old section numbers still parse.
 
+### Rolling back to 0.9.0
+
+Tested, and safe with one required step. No command crashes: 0.9.0 reads a slim `trace.json` without error, and one `trace-build` per feature restores the fat format.
+
+**Until you run that rebuild, impact analysis silently under-reports.** 0.9.0 has no `hydrateTrace`, so the derived half is simply absent: on a real feature, `trace-impact --ids FR-010` returned 0 files and 0 tasks against the slim trace where 0.10.0 returns 17 and 5; `--keywords cert` lost 6 tasks and 21 files. A `/sf:change` on that FR would resolve to zero tasks and read as "nothing to reopen". `STATE.md` also reports the persisted link count rather than the full one (41 instead of 245 on one feature).
+
+So if you roll back, immediately run for each feature:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs trace-build --sd .spec-flow/specs/<feature>/SD.md --feature <feature>
+```
+
 ### Known gaps
 
 - All 41 test cases of this release's own feature are `no-verify`: the manual-test runner supports `request` / `request.kafka` / `verify: SQL` and this was a CLI change with no HTTP surface. Evidence is 900+ unit tests plus the 210-probe equivalence run, not a checklist sweep. `run-checklist --json` still counts `no-verify` tests as `passed`, which is a false green recorded in backlog.
