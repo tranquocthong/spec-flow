@@ -74,7 +74,7 @@ Input: `$ARGUMENTS` (all optional; spec-flow auto-detects project name from the 
 5. **Next**:
    - Commit chosen → tell the user: `git add .spec-flow/ .taskmaster/ && git commit -m "chore: init spec-flow profile"`.
    - Keep local → note `.spec-flow/` was added to `.gitignore`; nothing to commit.
-   - **Provider:** default is **`claude-code` — no API key required** (`parse_prd` / `analyze_complexity` run through your Claude Code session). Only if you prefer your own provider: add `ANTHROPIC_API_KEY` (and `PERPLEXITY_API_KEY` for research) to your environment or `.mcp.json` and switch with `node ${CLAUDE_PLUGIN_ROOT}/bin/task-master models --set-main <model> --<provider>`.
+   - **Provider:** default is **`claude-code` — no API key required** (`parse-prd` / `expand` run through your Claude Code session). Only if you prefer your own provider: add `ANTHROPIC_API_KEY` (and `PERPLEXITY_API_KEY` for research) to your environment or `.mcp.json` and switch with `node ${CLAUDE_PLUGIN_ROOT}/bin/task-master models --set-main <model> --<provider>`.
 
 6. **Explain the two-tier OVERLAY model**
    ```
