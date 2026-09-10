@@ -19,7 +19,7 @@
 const fs = require('fs');
 const path = require('path');
 const {
-  STATE_DIR, PATHS, PLUGIN_ROOT, STATE_FILE, SKIP_SCAN_DIRS, SD_COLS, ok, err, parseArgs, readJsonSafe, traceFileFor, readTrace, resolveActiveFeature, stateFileFor, stateFeatureOf, shipFileFor, ensureDir, slugify, pad3, readTmTasks, fileLinksPathFor, resolveRepos, parseReposArg, langPack, kwRe, cleanHeading, parseHeadings, bodyOf, classifyHeading, findHeading, findTableByHeader, parseFirstTable, parseAllTables, splitRow, resolveCols, tableShapeWarnings, parseUserStories, trimOrNull, extractBulletsAfter, inferDesignType, parseSrs, parseProseBullets, TODO, countSdTodos, mdCell, moscowFor, genSd, readSdTables, scoreComplexity, routeFor, tcIdsForReq, resolveTemplate
+  STATE_DIR, PATHS, PLUGIN_ROOT, STATE_FILE, SKIP_SCAN_DIRS, SD_COLS, ok, err, parseArgs, readJsonSafe, traceFileFor, readTrace, hydrateTrace, resolveActiveFeature, stateFileFor, stateFeatureOf, shipFileFor, ensureDir, slugify, pad3, readTmTasks, fileLinksPathFor, resolveRepos, parseReposArg, langPack, kwRe, cleanHeading, parseHeadings, bodyOf, classifyHeading, findHeading, findTableByHeader, parseFirstTable, parseAllTables, splitRow, resolveCols, tableShapeWarnings, parseUserStories, trimOrNull, extractBulletsAfter, inferDesignType, parseSrs, parseProseBullets, TODO, countSdTodos, mdCell, moscowFor, genSd, readSdTables, scoreComplexity, routeFor, tcIdsForReq, resolveTemplate
 } = require('../lib/core.cjs');
 const maintenance = require('../lib/maintenance.cjs');
 const drift = require('../lib/drift.cjs');
@@ -656,7 +656,10 @@ const commands = {
 
     // Try to read trace for task counts and feature name (per-feature durable copy
     // when --feature is given, else the active-feature mirror).
-    const trace = readTrace(feature);
+    // D3: state-update reports task counts from nodes.tasks, which is DERIVED and
+    // no longer persisted in trace.json — hydrate before reading it.
+    const rawTrace = readTrace(feature);
+    const trace = rawTrace ? hydrateTrace(feature, rawTrace) : rawTrace;
     const traceTasks = (trace && trace.nodes && trace.nodes.tasks) || [];
     const featureName = feature || (trace && trace.feature) || 'unknown';
 
@@ -930,7 +933,10 @@ const commands = {
     if (args.apply && featureSource !== 'explicit') {
       return err('MISSING_ARG: --feature <f> required with --apply — task-baseline writes task statuses, and the global trace.json mirror is shared across concurrent sessions (it can point at another feature).');
     }
-    const trace = readTrace(feature);
+    // D3: task-baseline walks fr-task links (derived from file-links.json) —
+    // hydrate or every task resolves to zero FRs and nothing ever baselines.
+    const rawBaseTrace = readTrace(feature);
+    const trace = rawBaseTrace ? hydrateTrace(feature, rawBaseTrace) : rawBaseTrace;
     if (!trace) return err('NO_TRACE: run trace-build first');
 
     const verPath = path.join(STATE_DIR, 'specs', feature, 'VERIFICATION.md');
