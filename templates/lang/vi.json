@@ -15,7 +15,11 @@
     "glossary": ["thuật ngữ"],
     "stateName": ["trạng thái"],
     "stateMeaning": ["ý nghĩa"],
-    "businessLogic": ["quy tắc nghiệp vụ", "tên logic"]
+    "businessLogic": ["quy tắc nghiệp vụ", "tên logic"],
+    "nfrId": ["mã"],
+    "nfrCategory": ["danh mục", "loại"],
+    "nfrRequirement": ["yêu cầu", "mô tả"],
+    "nfrTarget": ["ngưỡng", "mục tiêu"]
   },
   "designType": {
     "internal": ["bất đồng bộ", "rà soát", "tác vụ", "định kỳ"],

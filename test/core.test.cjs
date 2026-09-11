@@ -247,6 +247,174 @@ test('genSd: free-form SRS with nothing parseable → TODO placeholders', () => 
   assert.ok(stats.todoManualReview > 0, 'emits TODO markers when nothing harvested');
 });
 
+// ---------------------------------------------------------------------------
+// genSd: silent-truncation regression. Measured on a real SRS, every FR/NFR
+// harvested via the ID-prefix/business-logic fallback paths that ran past
+// ~220 chars got cut mid-word at EXACTLY 220, several losing only the closing
+// "." — an ordinary requirement sentence, not a pathological input. The cap
+// is now a generous backstop (CELL_TEXT_CAP), not a routine limit: normal
+// harvested text must survive whole, and only a truly pathological (2000+
+// char) cell still gets cut — and even then must name the id in `warnings`.
+// ---------------------------------------------------------------------------
+
+test('REGRESSION genSd: a normal 357-char FR sentence (the exact shape that used to get cut at 220) survives whole, untruncated, no warning', () => {
+  // Reproduces the reported shape: a single ordinary requirement sentence, well
+  // past the old 220-char cap, ending in a period that used to be the first
+  // thing lost.
+  const longText = 'The system must validate the incoming payload against the registered schema, reject any field not declared in the contract, log a structured audit entry with correlation id and actor, and re-publish the normalized event to the downstream topic within the configured operational latency budget for this route.';
+  assert.ok(longText.length > 220, 'sanity: the fixture is actually past the old cap');
+  const srs = core.parseSrs([
+    '# Feature: Outbox',
+    '',
+    '## 5. Chuc nang',
+    '',
+    '| Ma | Mo ta |',
+    '| --- | --- |',
+    `| FR-1 | ${longText} |`,
+    '',
+  ].join('\n'));
+  const { sd, warnings } = core.genSd(srs, { feature: 'outbox' });
+  assert.equal(warnings.filter((w) => w.startsWith('TRUNCATED')).length, 0, 'an ordinary long sentence must not be flagged as truncated');
+  const frRow = sd.split('\n').find((l) => l.startsWith('| FR-001 |'));
+  assert.ok(frRow && frRow.includes(longText), 'the full sentence, including its closing period, survives in the cell');
+});
+
+test('REGRESSION genSd: a business-logic rule past the pathological-length backstop is flagged as TRUNCATED', () => {
+  const longRule = 'x'.repeat(2200);
+  const srs = core.parseSrs([
+    '# Feature: Outbox',
+    '',
+    '## Rules',
+    '',
+    '| Rule ID | Business Logic | Extra | Detail |',
+    '| --- | --- | --- | --- |',
+    `| BL-001 | short | n/a | ${longRule} |`,
+    '',
+  ].join('\n'));
+  const { sd, warnings } = core.genSd(srs, { feature: 'outbox' });
+  const w = warnings.join(' ');
+  assert.match(w, /TRUNCATED/, 'a truncated BL-derived FR is flagged');
+  assert.match(w, /FR-001/, 'names the truncated FR id');
+  const frRow = sd.split('\n').find((l) => l.startsWith('| FR-001 |'));
+  assert.ok(frRow && !frRow.includes(longRule), 'sanity: the row really was cut (not accidentally kept whole)');
+});
+
+test('REGRESSION genSd: an ID-prefix FR row past the pathological-length backstop is flagged as TRUNCATED', () => {
+  const longText = 'y'.repeat(2200);
+  const srs = core.parseSrs([
+    '# Feature: Outbox',
+    '',
+    '## 5. Chuc nang',
+    '',
+    '| Ma | Mo ta |',
+    '| --- | --- |',
+    `| FR-1 | ${longText} |`,
+    '',
+  ].join('\n'));
+  const { warnings } = core.genSd(srs, { feature: 'outbox' });
+  const w = warnings.join(' ');
+  assert.match(w, /TRUNCATED/);
+  assert.match(w, /FR-001/);
+});
+
+test('REGRESSION genSd: an ID-prefix TC row past the pathological-length backstop is flagged as TRUNCATED', () => {
+  const longText = 'z'.repeat(2200);
+  const srs = core.parseSrs([
+    '# Feature: Outbox',
+    '',
+    '## Test Cases',
+    '',
+    '| Ma | Mo ta |',
+    '| --- | --- |',
+    `| TC-1 | ${longText} |`,
+    '',
+  ].join('\n'));
+  const { warnings } = core.genSd(srs, { feature: 'outbox' });
+  const w = warnings.join(' ');
+  assert.match(w, /TRUNCATED/);
+  assert.match(w, /TC-001/);
+});
+
+test('genSd: short FR/TC text under the cell cap produces no TRUNCATED warning', () => {
+  const srs = core.parseSrs([
+    '# Feature: Outbox',
+    '',
+    '## 5. Chuc nang',
+    '',
+    '| Ma | Mo ta |',
+    '| --- | --- |',
+    '| FR-1 | publish after commit |',
+    '',
+  ].join('\n'));
+  const { warnings } = core.genSd(srs, { feature: 'outbox' });
+  assert.equal(warnings.filter((w) => w.startsWith('TRUNCATED')).length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// genSd: §5.2 NFR column-resolution regression. The heading-harvested NFR
+// table used to read columns POSITIONALLY (r[0]=requirement, r[1]=target),
+// assuming the bare "Requirement | Target" shape. A richer SRS table —
+// "ID | Category | Requirement | Target", the SD's OWN §5.2 convention — got
+// its ID column read as the requirement TEXT, its real Category dumped into
+// Target next to the actual target value, and every row force-labeled
+// "Perf/Sec" regardless of its real category (Resilience, Regression, ...).
+// ---------------------------------------------------------------------------
+
+test('REGRESSION genSd: an "ID | Category | Requirement | Target" NFR table resolves columns by header, not by position', () => {
+  const srs = core.parseSrs([
+    '# Feature: Outbox',
+    '',
+    '## 6. Non-Functional Requirements',
+    '',
+    '| ID | Category | Requirement | Target |',
+    '| --- | --- | --- | --- |',
+    '| NFR-01 | Performance | p95 latency stays under caller timeout | p95 < timeout caller |',
+    '| NFR-02 | Resilience | retries survive a broker restart | 3 retries, exponential backoff |',
+    '| NFR-03 | Regression | existing outbox consumers keep working | 0 breaking changes |',
+    '',
+  ].join('\n'));
+  const { sd, stats } = core.genSd(srs, { feature: 'outbox' });
+  assert.equal(stats.nfr, 3);
+  const rows = sd.split('\n').filter((l) => l.startsWith('| NFR-'));
+  assert.equal(rows.length, 3);
+
+  const cells = (row) => core.splitRow(row);
+  const [r1, r2, r3] = rows;
+
+  // Category column: each row's OWN category, never a hardcoded "Perf/Sec".
+  assert.match(cells(r1)[1], /Performance/, 'row 1 keeps its real category');
+  assert.match(cells(r2)[1], /Resilience/, 'row 2 is Resilience, not force-labeled Perf/Sec');
+  assert.match(cells(r3)[1], /Regression/, 'row 3 is Regression, not force-labeled Perf/Sec');
+
+  // Requirement column: the SRS's requirement TEXT, never the "NFR-01" id.
+  assert.match(cells(r1)[2], /p95 latency stays under caller timeout/);
+  assert.ok(!/^NFR-01$/.test(cells(r1)[2].trim()), 'the ID must not land in the Requirement column');
+
+  // Target column: the SRS's real target value, not the category text stuffed alongside it.
+  assert.match(cells(r1)[3], /p95 < timeout caller/);
+  assert.ok(!/Performance/.test(cells(r1)[3]), 'the category must not be dumped into Target');
+});
+
+test('genSd: a bare "Requirement | Target" NFR table (no ID/Category columns) still falls back to the positional heuristic', () => {
+  const srs = core.parseSrs([
+    '# Feature: Outbox',
+    '',
+    '## 6. Non-Functional Requirements',
+    '',
+    '| Requirement | Target |',
+    '| --- | --- |',
+    '| Response time (p99) | 200ms |',
+    '',
+  ].join('\n'));
+  const { sd, stats } = core.genSd(srs, { feature: 'outbox' });
+  assert.equal(stats.nfr, 1);
+  const row = sd.split('\n').find((l) => l.startsWith('| NFR-001 |'));
+  const cells = core.splitRow(row);
+  assert.match(cells[1], /Perf\/Sec/, 'legacy 2-col shape keeps the old presence-of-target heuristic');
+  assert.match(cells[2], /Response time/);
+  assert.match(cells[3], /200ms/);
+});
+
 test('countSdTodos: only the marker blockquote counts, not the prose that mentions it', () => {
   // Every line below legitimately contains the string in a CLEARED, approved SD.
   // A bare /TODO:MANUAL-REVIEW/ counted all of them and gated work that was ready.

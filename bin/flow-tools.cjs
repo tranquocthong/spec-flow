@@ -850,6 +850,14 @@ const commands = {
     let prevMirrorFeature = null;
     try { prevMirrorFeature = stateFeatureOf(fs.readFileSync(STATE_FILE, 'utf8')); } catch {}
     const switchedFrom = (prevMirrorFeature && prevMirrorFeature !== featureName) ? prevMirrorFeature : null;
+    // Same singleton-mirror gap as trace-build's switchedFrom: a bare field with no
+    // severity is easy for a caller to never read. Promote it to a real warning when
+    // the prior feature has no ship record — the case where it may still be open and
+    // this switch is exactly where its position gets hard to find again.
+    const stateWarnings = [];
+    if (switchedFrom && !fs.existsSync(shipFileFor(switchedFrom))) {
+      stateWarnings.push(`ACTIVE FEATURE SWITCHED: the global .spec-flow/STATE.md mirror moved from "${switchedFrom}" to "${featureName}", and "${switchedFrom}" has no ship record — if it is still in-progress, its position is no longer reflected by the global mirror. Its durable state survives at .spec-flow/specs/${switchedFrom}/STATE.md; re-run \`state-update --feature ${switchedFrom}\` before resuming that feature.`);
+    }
     const perFeatureState = featureName !== 'unknown' ? stateFileFor(featureName) : null;
     try {
       if (perFeatureState) {
@@ -859,7 +867,7 @@ const commands = {
       fs.writeFileSync(STATE_FILE, stateContent);        // active-feature mirror
     } catch (e) { return err(`WRITE_FAILED: ${e.message}`); }
 
-    return ok({ state: STATE_FILE, perFeatureState, switchedFrom, shipped: shipped ? { shippedAt: shipped.shippedAt, ref: shipped.ref } : null, lines: lineCount, nextStep });
+    return ok({ state: STATE_FILE, perFeatureState, switchedFrom, shipped: shipped ? { shippedAt: shipped.shippedAt, ref: shipped.ref } : null, lines: lineCount, nextStep, warnings: stateWarnings });
   },
 
   // -----------------------------------------------------------------------

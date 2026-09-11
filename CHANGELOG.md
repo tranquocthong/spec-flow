@@ -2,6 +2,17 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [0.10.1] — 2026-09-11
+
+Four bugs surfaced by running `/sf:ingest` against a real SRS in a downstream project, all in the Pass-1 deterministic harvest and the traceability engine. None block a fix directly in code — `bin/flow-tools.cjs`, `lib/core.cjs`, `lib/trace.cjs`.
+
+- **Pass-1 silently truncated harvested FR/TC/NFR cells at a hard 200/220-char cap.** Measured on a real SRS: every requirement sentence past ~220 chars got cut mid-word with no `…` and no signal — several lost only the closing period, reading as a complete sentence. The cap is now a generous backstop (2000 chars) meant only for a genuinely pathological row; ordinary harvested text (verified up to 357 chars) now survives whole. A cell that still hits the backstop is named in `data.warnings` (`TRUNCATED: ...`) instead of disappearing silently.
+- **§5.2 NFR harvest read columns positionally, not by header.** A heading-harvested NFR table assumed the bare `Requirement | Target` shape (`r[0]`/`r[1]`); a richer `ID | Category | Requirement | Target` table — the SD's own §5.2 convention — got its ID column read as the requirement text, its real Category dumped into Target next to the actual target value, and every row force-labeled `Perf/Sec` regardless of its real category (Resilience, Regression, ...). Columns now resolve by header keyword (English + Vietnamese lang packs), falling back to the old positional read only for a genuinely unlabeled 2-3 col table.
+- **`trace-build`'s §10.4 header-drift check false-positived on a repurposed section.** A `### 10.4` section kept its number but retitled to unrelated content (e.g. an OUTBOX vs DIRECT route comparison — sd-template.md explicitly allows deleting/repurposing §10.4 when a feature has no state machine) was reported as a "state table header mismatch" even though the table was never meant to be a state table. The check now also requires the heading title to still carry the word "state" before warning.
+- **Switching the active feature's global `trace.json`/`STATE.md` mirror was silent.** `trace-build` and `state-update` already computed `switchedFrom` but returned it as inert JSON metadata with no severity — easy for a caller that only checks `data.warnings` to miss entirely. Both now push an `ACTIVE FEATURE SWITCHED` warning when the feature being switched away from has no ship record (still-open work); switching away from an already-shipped feature stays silent (expected churn).
+
+All four fixed with regression tests (8 added to `test/core.test.cjs` + `test/flow-tools.test.cjs`); full suite 907/907.
+
 ## [0.10.0] — 2026-09-10
 
 **One dogfooding session aimed at speed, which then found ten bugs — seven of them older than this release.** The intent was narrow: cut the token cost of the implement loop and the size of the artifacts it writes. Measured against four months of real use (37 features, 408 tasks, 31 tags in one 16-repo project). What made the bug count high is that the cuts forced every command to actually be RUN, and several code paths turned out never to have executed end to end. Fixing one layer kept exposing the next.

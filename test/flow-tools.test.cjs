@@ -1611,6 +1611,121 @@ test('REGRESSION trace-build: warns when a numbered section exists but its table
   assert.match(w, /Mã lỗi/, 'quotes the actual (mismatched) headers found');
 });
 
+test('REGRESSION trace-build: §10.4 repurposed for non-state content does NOT get a false "state table" mismatch warning', () => {
+  // A project can legitimately keep the "10.4" numbering but retitle the sub-section
+  // away from "State Management" (sd-template.md explicitly allows deleting/repurposing
+  // it when the feature has no state machine). Before the titleRe guard, ANY table under
+  // a heading numbered 10.4 was compared against the state-table header convention and
+  // flagged as a "mismatch" even when the table was never meant to be a state table.
+  const dir = tmpProject();
+  initProject(dir);
+  const sdDir = path.join(dir, '.spec-flow', 'specs', 'demo');
+  fs.mkdirSync(sdDir, { recursive: true });
+  fs.writeFileSync(path.join(sdDir, 'SD.md'), [
+    '# SD: demo', '',
+    '## 5.1 Functional Requirements', '',
+    '| ID | Requirement | Priority | Source |',
+    '| --- | --- | --- | --- |',
+    '| FR-001 | does X | Must Have | US-1 |', '',
+    '### 10.4 OUTBOX vs DIRECT Route Comparison', '',
+    '| Route | Latency | Consistency |',
+    '| --- | --- | --- |',
+    '| OUTBOX | higher | strong |',
+    '| DIRECT | lower | eventual |', '',
+  ].join('\n'));
+  const r = run(['trace-build', '--sd', path.join(sdDir, 'SD.md'), '--feature', 'demo'], dir);
+  assert.equal(r.ok, true);
+  const w = r.data.warnings.join(' ');
+  assert.ok(!/§10\.4 state table/.test(w), 'a repurposed, non-state §10.4 table must not be flagged as a state-table header mismatch');
+});
+
+test('REGRESSION trace-build: §10.4 still warns when it IS a state section with translated/mismatched headers', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  const sdDir = path.join(dir, '.spec-flow', 'specs', 'demo');
+  fs.mkdirSync(sdDir, { recursive: true });
+  fs.writeFileSync(path.join(sdDir, 'SD.md'), [
+    '# SD: demo', '',
+    '## 5.1 Functional Requirements', '',
+    '| ID | Requirement | Priority | Source |',
+    '| --- | --- | --- | --- |',
+    '| FR-001 | does X | Must Have | US-1 |', '',
+    '### 10.4 State Management', '',
+    '| Trạng thái | Ý nghĩa |',
+    '| --- | --- |',
+    '| PENDING | chờ xử lý |', '',
+  ].join('\n'));
+  const r = run(['trace-build', '--sd', path.join(sdDir, 'SD.md'), '--feature', 'demo'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.counts.states, 0, 'header-translated state table parses to 0 nodes');
+  const w = r.data.warnings.join(' ');
+  assert.match(w, /§10\.4 state table/, 'a genuine state section with drifted headers still gets flagged');
+});
+
+test('REGRESSION trace-build/state-update: switching the active-feature mirror away from an unfinished feature is a real warning, not silent metadata', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  // Feature A: build its trace + state first (becomes the active mirror), no ship record.
+  const aDir = path.join(dir, '.spec-flow', 'specs', 'feature-a');
+  fs.mkdirSync(aDir, { recursive: true });
+  fs.writeFileSync(path.join(aDir, 'SD.md'), [
+    '# SD: feature-a', '',
+    '## 5.1 Functional Requirements', '',
+    '| ID | Requirement | Priority | Source |',
+    '| --- | --- | --- | --- |',
+    '| FR-001 | does X | Must Have | US-1 |', '',
+  ].join('\n'));
+  let r = run(['trace-build', '--sd', path.join(aDir, 'SD.md'), '--feature', 'feature-a'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.switchedFrom, null, 'first trace-build in a fresh project has nothing to switch from');
+  r = run(['state-update', '--feature', 'feature-a'], dir);
+  assert.equal(r.ok, true);
+
+  // Feature B: building its trace now switches the global mirror away from A, which
+  // has no ship record — this must surface as a warning, not just switchedFrom metadata.
+  const bDir = path.join(dir, '.spec-flow', 'specs', 'feature-b');
+  fs.mkdirSync(bDir, { recursive: true });
+  fs.writeFileSync(path.join(bDir, 'SD.md'), [
+    '# SD: feature-b', '',
+    '## 5.1 Functional Requirements', '',
+    '| ID | Requirement | Priority | Source |',
+    '| --- | --- | --- | --- |',
+    '| FR-001 | does Y | Must Have | US-1 |', '',
+  ].join('\n'));
+  r = run(['trace-build', '--sd', path.join(bDir, 'SD.md'), '--feature', 'feature-b'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.switchedFrom, 'feature-a');
+  let w = r.data.warnings.join(' ');
+  assert.match(w, /ACTIVE FEATURE SWITCHED/, 'trace-build warns when switching away from an unshipped feature');
+  assert.match(w, /feature-a/);
+
+  r = run(['state-update', '--feature', 'feature-b'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.switchedFrom, 'feature-a');
+  w = (r.data.warnings || []).join(' ');
+  assert.match(w, /ACTIVE FEATURE SWITCHED/, 'state-update warns when switching away from an unshipped feature');
+});
+
+test('REGRESSION trace-build/state-update: switching away from a SHIPPED feature stays silent (expected churn)', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  const aDir = path.join(dir, '.spec-flow', 'specs', 'feature-a');
+  fs.mkdirSync(aDir, { recursive: true });
+  fs.writeFileSync(path.join(aDir, 'SD.md'), '# SD: feature-a\n');
+  run(['trace-build', '--sd', path.join(aDir, 'SD.md'), '--feature', 'feature-a'], dir);
+  let r = run(['state-update', '--feature', 'feature-a', '--shipped'], dir);
+  assert.equal(r.ok, true);
+  assert.ok(fs.existsSync(path.join(aDir, 'ship.json')), 'ship record written');
+
+  const bDir = path.join(dir, '.spec-flow', 'specs', 'feature-b');
+  fs.mkdirSync(bDir, { recursive: true });
+  fs.writeFileSync(path.join(bDir, 'SD.md'), '# SD: feature-b\n');
+  r = run(['trace-build', '--sd', path.join(bDir, 'SD.md'), '--feature', 'feature-b'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.switchedFrom, 'feature-a');
+  assert.ok(!/ACTIVE FEATURE SWITCHED/.test(r.data.warnings.join(' ')), 'a shipped feature switching away is expected churn, stays silent');
+});
+
 test('REGRESSION trace-build: warns on FRs with no linked TC in §13.2 (orphan requirement)', () => {
   const dir = tmpProject();
   initProject(dir);
