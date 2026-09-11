@@ -1,10 +1,14 @@
 """Token resolution — returns (header_name, header_value) for a token def.
 
-Four forms:
+Five forms:
   auth: keycloak_ropc                 → kc-ropc.sh password grant → Bearer
   type: keycloak-client-credentials   → OAuth2 client_credentials grant
   payload: '<json>'                   → base64 → X-Userinfo (Summer/APISIX)
   bearer: '<jwt-or-${ENV_VAR}>'       → literal pre-minted token → Bearer
+  cookie: '<name>=<value-or-${ENV_VAR}>' → literal Cookie header, no prefix
+                                         (cookie-session APIs, e.g. a login
+                                         step captures Set-Cookie into an env
+                                         var and this passes it through as-is)
 
 Token-def string fields are ${VAR}-expanded before use (e.g. ${USER_ID}).
 """
@@ -60,5 +64,10 @@ def resolve_token(tok_def, scripts_dir, varstore):
         if not td["bearer"]:
             raise RuntimeError("bearer token def resolved to an empty value (check the env var it references)")
         return (td.get("header", "Authorization"), f"Bearer {td['bearer']}")
+
+    if "cookie" in td:
+        if not td["cookie"]:
+            raise RuntimeError("cookie token def resolved to an empty value (check the env var it references)")
+        return (td.get("header", "Cookie"), td["cookie"])
 
     raise ValueError(f"unsupported token def: {tok_def}")

@@ -15,7 +15,11 @@
     "glossary": ["term"],
     "stateName": ["state"],
     "stateMeaning": ["meaning", "description"],
-    "businessLogic": ["business logic"]
+    "businessLogic": ["business logic"],
+    "nfrId": ["\\bid\\b"],
+    "nfrCategory": ["categor"],
+    "nfrRequirement": ["requirement", "description"],
+    "nfrTarget": ["target", "threshold", "acceptance"]
   },
   "designType": {
     "internal": ["async", "scheduler", "cron", "batch", "worker", "consumer", "job", "kafka", "event"],
