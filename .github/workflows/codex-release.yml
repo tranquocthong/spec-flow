@@ -1,0 +1,55 @@
+name: Codex plugin
+on:
+  pull_request:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [18, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install PyYAML
+      - run: node --test test/*.test.cjs
+      - run: python -m unittest discover -s skills/manual-test/scripts/checklist_lib/tests
+      - run: node scripts/build-codex.cjs
+      - run: node scripts/validate-codex.cjs
+  package:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/build-codex.cjs
+      - run: node scripts/validate-codex.cjs
+      - name: Package Codex marketplace
+        run: tar -czf spec-flow-codex.tar.gz -C dist/codex .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spec-flow-codex
+          path: spec-flow-codex.tar.gz
+      - name: Attach Codex package to published SF release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          node -e 'const v=require("./.claude-plugin/plugin.json").version; if(process.env.RELEASE_TAG !== `v${v}`) throw new Error("Release tag differs from source version")'
+          gh release upload "$RELEASE_TAG" spec-flow-codex.tar.gz

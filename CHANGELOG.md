@@ -2,6 +2,18 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [0.11.1] — 2026-09-15
+
+### Added
+
+- Codex support through a generated `spec-flow-codex` plugin distribution. It preserves the shared `.spec-flow/`, `.taskmaster/`, and legacy manual-test artifacts while adapting skill entry points, host detection, and hooks for Codex.
+- A reproducible build, distribution validation, compatibility tests, and GitHub Actions release artifact (`spec-flow-codex.tar.gz`).
+
+### Notes
+
+- Codex uses the active session for `agent-native` task generation. Existing explicit provider configurations are retained unchanged.
+- Codex hooks must be reviewed and trusted through `/hooks` on each client.
+
 ## [0.11.0] — 2026-09-15
 
 **The manual-test gate could report a green run having executed nothing, and this release makes that impossible to say.** Found by auditing a downstream project's 842 test cases across 33 features, then reproduced against the runner in two lines of YAML. The plugin's own backlog note (`run-checklist-no-verify-false-green.md`, filed 2026-09-10) described one symptom of it; this is the root cause and the fix.
