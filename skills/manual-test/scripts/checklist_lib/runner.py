@@ -124,6 +124,41 @@ def _run_verify(verify_block, ctx, errs, msgs):
             errs.append(f"kafka verify: {detail}")
 
 
+# Keys inside `expect` that assert_expect (or the runner's own poll branch) turns
+# into an error when they do not hold. Anything else in `expect` is inert — a
+# decorative `{n: 3}` produces no error and therefore cannot fail a test.
+_ASSERTING_EXPECT_KEYS = {"status", "body_contains", "body_not_contains",
+                          "json_path", "body", "poll"}
+# Setup steps that actually run something. run_steps aborts on the first failure
+# and the caller turns that into a FAIL, so `setup: - exec: ... exit 1` IS a real
+# assertion even though the test declares no `expect` at all.
+_EXECUTING_SETUP_KEYS = {"exec", "sql", "kafka", "http"}
+
+
+def _unexecutable_reason(test):
+    """Why this test can produce no evidence, or None if it can.
+
+    PASS is computed as "no assertion reported an error", so a test with nothing
+    to send and nothing to assert passes without executing anything: no request
+    leaves the machine, `status=0` is printed, and the id lands in the JSON
+    "passed" list. Such a test is a placeholder for a hand-run step, and counting
+    it as passed is how a feature reaches `status: passed` with no evidence.
+    """
+    if test.get("request"):
+        return None
+    if test.get("verify"):
+        return None
+    exp = test.get("expect")
+    if isinstance(exp, dict) and (set(exp) & _ASSERTING_EXPECT_KEYS):
+        return None
+    for step in test.get("setup") or []:
+        if isinstance(step, dict) and (set(step) & _EXECUTING_SETUP_KEYS):
+            return None
+    tags = [t for t in (test.get("tags") or []) if t in ("no-verify", "live-e2e")]
+    hint = f" ({', '.join(tags)})" if tags else ""
+    return f"no request, no assertion, no executing setup step{hint} — run it by hand"
+
+
 def main(argv=None):
     args = parse_args(argv)
     try:
@@ -183,6 +218,9 @@ def main(argv=None):
 
     total = passed = failed = skipped = 0
     results = []  # per-test outcome for --json: {"id", "ok", "reason"}
+    not_verified = []  # [{"id", "reason"}] — selected by the tag filter but with
+                       # nothing to execute. Kept out of `passed` so that a run of
+                       # nothing but placeholders cannot report a green result.
     teardown_warnings = []  # [{"id", "warning"}] — a failed teardown step never fails the
                              # test itself (by design: recovery ran AFTER the result was
                              # already recorded), but it must not vanish either — it's
@@ -211,6 +249,12 @@ def main(argv=None):
             total += 1
             vs.new_test_start()
 
+            nv_reason = _unexecutable_reason(test)
+            if nv_reason:
+                print(f"  {tid}  {YELLOW}— NOT VERIFIED{RESET}: {nv_reason}")
+                not_verified.append({"id": tid, "reason": nv_reason})
+                continue
+
             err = setup.run_steps(test.get("setup", []), ctx, dry_run=args.dry_run)
             if err:
                 print(f"  {RED}✗ {tid}: setup failed: {err}{RESET}")
@@ -220,17 +264,31 @@ def main(argv=None):
 
             req = test.get("request") or {}
             exp = test.get("expect") or {}
-            label = "kafka" if req.get("kafka") else f"{(req.get('method') or 'GET').upper()} {vs.expand(req.get('path', ''))}"
+            # No `request` block: the assertion lives in setup/verify/poll. Do NOT
+            # synthesise a GET here — it used to send an empty request to base_url
+            # and print `GET  / status=0`, which reads as a real HTTP check that
+            # passed. Against a live environment that stray call can also touch a
+            # real endpoint.
+            if req:
+                label = "kafka" if req.get("kafka") else f"{(req.get('method') or 'GET').upper()} {vs.expand(req.get('path', ''))}"
+            else:
+                label = "— asserted by setup/verify"
             print(f"  {tid}  {label}")
 
             if args.dry_run:
                 print("    → DRY_RUN (request/SQL skipped)")
                 continue
 
-            kind, a, b, c = _send_request(req, ctx)
+            kind, a, b, c = (("none", None, None, None) if not req
+                             else _send_request(req, ctx))
             errs, msgs = [], []
 
-            if kind == "error":
+            if kind == "none":
+                # Nothing was sent; only an async settle can still be asserted here.
+                if exp.get("poll"):
+                    ok, detail = sql.poll(exp["poll"], db_name, args.scripts_dir, vs, dbs)
+                    (msgs if ok else errs).append(f"      poll: {detail}" if ok else f"poll: {detail}")
+            elif kind == "error":
                 errs.append(b)
             elif kind == "kafka":
                 if not a:
@@ -291,6 +349,10 @@ def main(argv=None):
     print(f"  {GREEN}passed:  {passed}{RESET}")
     print(f"  {RED}failed:  {failed}{RESET}")
     print(f"  skipped: {skipped}")
+    if not_verified:
+        print(f"  {YELLOW}not verified: {len(not_verified)}{RESET} (nothing to execute — NOT counted as passed; record evidence by hand)")
+        for nv in not_verified:
+            print(f"    {YELLOW}- {nv['id']}: {nv['reason']}{RESET}")
     if teardown_warnings:
         print(f"  {YELLOW}teardown warnings: {len(teardown_warnings)}{RESET} (recovery/cleanup step failed after the test's own result was recorded — state may be dirty for later tests)")
         for tw in teardown_warnings:
@@ -301,6 +363,7 @@ def main(argv=None):
         print(json.dumps({
             "passed": [r["id"] for r in results if r["ok"]],
             "failed": [{"id": r["id"], "reason": r.get("reason", "FAIL")} for r in results if not r["ok"]],
+            "notVerified": not_verified,
             "teardownWarnings": teardown_warnings,
         }))
     return 0 if failed == 0 else 1

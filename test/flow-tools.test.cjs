@@ -1018,6 +1018,46 @@ test('REGRESSION verify-collect: actually WRITES VERIFICATION.md (was JSON-only,
   assert.equal(sr2.data.verified, true, 'an all-pass run is reported verified');
 });
 
+test('verify-collect: a test the runner never executed is NOT recorded as verified', () => {
+  // The runner computes PASS as "no assertion reported an error", so a test with
+  // no request, no assertion and no executing setup step used to land in "passed"
+  // without anything leaving the machine. verify-collect then wrote
+  // `status: passed` + `- TC-00x: verified` for evidence that does not exist, and
+  // the ship gate opened on it. The runner now reports those ids under
+  // notVerified; they must never become a truth, and their presence must hold the
+  // status at incomplete so a human records the evidence by hand.
+  const dir = tmpProject();
+  initProject(dir);
+  const r = run(['verify-collect', '--feature', 'demo', '--results',
+    '{"passed":["TC-001"],"failed":[],"notVerified":[{"id":"TC-002","reason":"no request, no assertion (live-e2e)"}]}'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.status, 'incomplete', 'an unexecuted test holds the status back from passed');
+  assert.deepEqual(r.data.truths, ['TC-001: verified'], 'only the executed test becomes a truth');
+  assert.equal(r.data.notVerified[0].id, 'TC-002');
+
+  const md = fs.readFileSync(path.join(dir, '.spec-flow', 'specs', 'demo', 'VERIFICATION.md'), 'utf8');
+  assert.doesNotMatch(md, /^-\s*TC-002:\s*verified\b/m, 'the unexecuted TC is never written as verified');
+  assert.match(md, /TC-002:\s*NOT VERIFIED/, 'it is named as needing a hand-run, with the reason');
+  assert.match(md, /## Not verified/, 'a section tells the reader what is still owed');
+
+  // The ship gate stays shut until someone records the evidence.
+  const sr = run(['status-report', '--feature', 'demo'], dir);
+  assert.equal(sr.data.verified, false, 'incomplete does not open the ship gate');
+});
+
+test('verify-collect: an all-placeholder run reports nothing passed', () => {
+  // The shape from the plugin's own backlog note: every TC carved out with
+  // no-verify/live-e2e, runner reported "41 passed, 0 failed", VERIFICATION.md
+  // said status: passed. Nothing had run.
+  const dir = tmpProject();
+  initProject(dir);
+  const r = run(['verify-collect', '--feature', 'demo', '--results',
+    '{"passed":[],"failed":[],"notVerified":[{"id":"TC-001","reason":"x"},{"id":"TC-002","reason":"x"}]}'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.status, 'incomplete');
+  assert.deepEqual(r.data.truths, [], 'no truths at all — nothing was executed');
+});
+
 // ---------------------------------------------------------------------------
 // Language pack — SRS-parsing keywords are DATA, loaded per config.language
 // ---------------------------------------------------------------------------

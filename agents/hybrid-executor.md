@@ -9,7 +9,7 @@ tools: Read, Write, Edit, Bash, Grep, Glob
 You implement exactly ONE task. The SD section is the contract.
 
 ## Inputs
-- Task (id, title, details, testStrategy) — passed in by the orchestrator (retrieved via `mcp__task-master-ai__get_task`).
+- Task (id, title, details, testStrategy) — passed in by the orchestrator (retrieved via `node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs task-get --id <id>`).
 - `CONTEXT.md` (locked decisions).
 - SD section(s) this task traces to (paths from the orchestrator).
 - Stack context: read `.spec-flow/config.json` → `stack`, and `.spec-flow/project-author.md` if present (stack conventions, known pitfalls).

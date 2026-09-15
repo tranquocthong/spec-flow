@@ -16,7 +16,7 @@ import unittest
 # Make `import checklist_lib` work regardless of cwd (scripts/ is two levels up).
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
-from checklist_lib import assertions, jsonpath, sql  # noqa: E402
+from checklist_lib import assertions, jsonpath, runner, sql  # noqa: E402
 from checklist_lib.vars import VarStore  # noqa: E402
 
 
@@ -679,6 +679,59 @@ class TestHttpRequestBodyViaStdin(unittest.TestCase):
         finally:
             sp.run = orig
         self.assertIsNone(captured["input"])
+
+
+class TestUnexecutableTest(unittest.TestCase):
+    """A test the runner cannot execute must not be reported as passed.
+
+    PASS is "no assertion reported an error", so a placeholder with nothing to
+    send and nothing to assert used to pass without executing anything — which is
+    how a feature reached `status: passed` with no evidence behind it.
+    """
+
+    def test_placeholder_with_nothing_to_run_is_unexecutable(self):
+        for tags in (["live-e2e", "regression"], ["no-verify", "smoke"], []):
+            with self.subTest(tags=tags):
+                reason = runner._unexecutable_reason({"id": "TC-001", "tags": tags})
+                self.assertIsNotNone(reason)
+                self.assertIn("no request", reason)
+
+    def test_carve_out_tag_is_named_in_the_reason(self):
+        reason = runner._unexecutable_reason({"id": "TC-001", "tags": ["live-e2e"]})
+        self.assertIn("live-e2e", reason)
+
+    def test_request_block_makes_it_executable(self):
+        self.assertIsNone(runner._unexecutable_reason(
+            {"id": "TC-001", "request": {"method": "GET", "path": "/x"}}))
+
+    def test_setup_exec_is_an_assertion(self):
+        # run_steps aborts on the first failing step and the caller turns that into
+        # a FAIL, so `exec: ... exit 1` asserts even with no expect block at all.
+        self.assertIsNone(runner._unexecutable_reason(
+            {"id": "TC-001", "setup": [{"exec": "test -f build/app.jar"}]}))
+        self.assertIsNone(runner._unexecutable_reason(
+            {"id": "TC-002", "setup": [{"sql": "SELECT 1"}]}))
+
+    def test_inert_setup_step_is_not_an_assertion(self):
+        reason = runner._unexecutable_reason({"id": "TC-001", "setup": [{"sleep": 2}]})
+        self.assertIsNotNone(reason)
+
+    def test_verify_block_makes_it_executable(self):
+        self.assertIsNone(runner._unexecutable_reason(
+            {"id": "TC-001", "verify": [{"sql": "SELECT status", "expect": "= DONE"}]}))
+
+    def test_asserting_expect_keys_make_it_executable(self):
+        for key, value in (("status", 200), ("body_contains", "ok"),
+                           ("json_path", "$.id"), ("body", {"id": 1}),
+                           ("body_not_contains", "secret"), ("poll", {"sql": "x"})):
+            with self.subTest(key=key):
+                self.assertIsNone(runner._unexecutable_reason(
+                    {"id": "TC-001", "expect": {key: value}}))
+
+    def test_decorative_expect_key_does_not_count(self):
+        # `{n: 3}` produces no error in assert_expect, so it can never fail a test.
+        reason = runner._unexecutable_reason({"id": "TC-001", "expect": {"n": 3}})
+        self.assertIsNotNone(reason)
 
 
 if __name__ == "__main__":

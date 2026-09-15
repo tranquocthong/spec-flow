@@ -48,7 +48,13 @@ const taskCli = require('../lib/task-cli.cjs');
  * status: passed) could therefore be opened by a file explicitly forbidding the ship.
  *
  * `verified-adhoc` is accepted alongside `passed` because /sf:phase close-out step 4
- * treats it as shippable (an out-of-loop live verify).
+ * treats it as shippable (an out-of-loop live verify) — it asserts a human DID
+ * verify, just not through the runner.
+ *
+ * `incomplete` (written by verify-collect when the runner reports notVerified test
+ * cases) deliberately matches NEITHER: nothing executed those cases and nobody has
+ * yet claimed otherwise. Running them by hand and setting `verified-adhoc` is the
+ * way out — which is a person putting their name on the evidence, not a default.
  */
 const VERIFIED_STATUS_RE = /^[ \t]*status:[ \t]*(?:passed|verified-adhoc)\b/im;
 

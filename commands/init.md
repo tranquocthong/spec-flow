@@ -55,8 +55,12 @@ Input: `$ARGUMENTS` (all optional; spec-flow auto-detects project name from the 
    `npx`, no `claude` CLI, etc.), print the commands for the user to run later and **continue**.
 
    a. **Init** — skip if `.taskmaster/` already exists; otherwise scaffold via Task Master's own init:
-      - Preferred: MCP tool `initialize_project` (projectRoot = cwd, `yes: true`).
-      - Fallback: `node ${CLAUDE_PLUGIN_ROOT}/bin/task-master init --yes` (the `task-master` CLI bin — NOT `npx task-master-ai`, which is the MCP server).
+      ```
+      node ${CLAUDE_PLUGIN_ROOT}/bin/task-master init --yes
+      ```
+      The plugin ships no MCP server, so there is no `initialize_project` tool to prefer — the
+      CLI bin is the only path. Never `npx task-master-ai`: that is an unrelated third-party
+      package, not this plugin's engine.
 
    b. **Default to the keyless `claude-code` provider** (uses the Claude Code CLI auth — **no API key**):
       ```
@@ -64,8 +68,8 @@ Input: `$ARGUMENTS` (all optional; spec-flow auto-detects project name from the 
       node ${CLAUDE_PLUGIN_ROOT}/bin/task-master models --set-fallback sonnet --claude-code
       node ${CLAUDE_PLUGIN_ROOT}/bin/task-master models --set-research sonnet --claude-code
       ```
-      **Use the `task-master` CLI binary** (via `-p <pkg> task-master`), NOT `npx task-master-ai …` — the
-      `task-master-ai` bin is the MCP server and would just launch the server, silently ignoring `models`.
+      **Use the bundled `task-master` CLI binary**, NOT `npx task-master-ai …` — that fetches an
+      unrelated third-party package whose bin launches an MCP server and silently ignores `models`.
       Task Master writes its own `.taskmaster/config.json` — spec-flow does not touch it. Verify with
       `node ${CLAUDE_PLUGIN_ROOT}/bin/task-master models` (all three roles should read `claude-code`).
 

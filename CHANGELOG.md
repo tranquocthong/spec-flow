@@ -2,6 +2,55 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [0.11.0] — 2026-09-15
+
+**The manual-test gate could report a green run having executed nothing, and this release makes that impossible to say.** Found by auditing a downstream project's 842 test cases across 33 features, then reproduced against the runner in two lines of YAML. The plugin's own backlog note (`run-checklist-no-verify-false-green.md`, filed 2026-09-10) described one symptom of it; this is the root cause and the fix.
+
+### The defect
+
+`runner.py` decides the outcome of a test with `if errs: FAIL else: PASS`. **`PASS` means "no assertion reported an error" — not "an assertion passed."** A test with nothing to send and nothing to assert produces no errors, so it passes without executing anything:
+
+```yaml
+suites:
+  - name: probe
+    tests:
+      - {id: TC-001, tags: [live-e2e, regression]}
+      - {id: TC-002, tags: [no-verify, regression]}
+```
+
+```
+run-checklist.sh probe.yaml --tag regression --json
+  TC-001  GET
+    ✓ PASS  status=0          <-- no request ever left the machine
+  total: 2   passed: 2   failed: 0
+{"passed": ["TC-001", "TC-002"], "failed": []}          exit 0
+```
+
+`verify-collect` then believed that count and wrote `status: passed` with `- TC-001: verified` under it. `status=0` was the only tell, and it reads like a status code.
+
+The 0.10.x lint already refuses a decorative `expect:` (a bare `{n: 3}` cannot fail a test, so it is not an assertion), but its own message offers the way around itself — *"OR tag the test no-verify / live-e2e"*. Those tags mark a placeholder for a hand-run step, and in practice they are written alongside `regression`, so `--tag regression` selected them and counted them green. The carve-out in the lint was the entrance to the false green.
+
+### The fix
+
+- **`runner.py` now separates *executed* from *passed*.** A test with no `request`, no `verify`, no asserting `expect` key and no executing `setup` step is reported under a new `notVerified` group — named in the console summary, and emitted as `"notVerified": [{id, reason}]` in the `--json` line. It is never counted as passed. Exit code is unchanged, so nothing that shells out to the runner breaks.
+- **`verify-collect` refuses to record evidence it does not have.** An id under `notVerified` never becomes a `- TC-xxx: verified` truth. Its presence holds the status at **`incomplete`** — deliberately not `verified-adhoc`, which `VERIFIED_STATUS_RE` accepts as shippable *because it asserts a human verified out of loop*. Nobody has, yet. `incomplete` matches no gate, so G3 stays shut until someone runs those cases, writes down what they saw, and sets `verified-adhoc` themselves. The generated file names each owed case under `## Not verified` with the reason.
+- **The runner no longer synthesises a GET for a test with no `request` block.** It used to send an empty request to `base_url` and print `GET  / status=0`, which reads as a real HTTP check that passed — one downstream VERIFICATION.md had already recorded the confusion (`for TC-013 the runner printed GET / status=404 / PASS`). Against a live environment that stray call could also touch a real endpoint. Such a test is now labelled `— asserted by setup/verify`, and only its `expect.poll` still runs.
+- **Lint gained a negative-path coverage warning.** The per-test rule asks whether a test asserts anything; it never asked whether the checklist ever exercises a rejection. In the audited project **14 of 33 features had zero test cases asserting `status >= 400`** — every error code and guard clause unexercised while every gate read green. A warning, not a failure: it is a signal about the SD's §13.2 test cases, and existing checklists must stay runnable.
+
+**A correction worth recording, because the first two passes of this audit were wrong.** An initial sweep called 228 of 842 test cases empty and flagged seven features as false-green. Both numbers were inflated. `setup:` steps carrying `exec:`/`sql:` **are** assertions — `run_steps` aborts on the first failure and the caller turns that into a FAIL, so `exec: ... exit 1` asserts perfectly well without an `expect` block, and one feature's 26 test cases were built entirely that way. And most flagged VERIFICATION files carried real hand-written evidence (`verified-live — 400 auth.invalid.otp, attemptsRemaining 5→4`) that a `status:`-line check could not see. After both corrections: **zero genuine false-greens on disk.** The mechanism is real and reproducible; in that project humans had caught every instance by hand. What this release removes is the need to.
+
+### Task engine: MCP surface removed, CLI only
+
+`.mcp.json` is deleted. The plugin declares **no MCP server** — every task operation goes through the bundled CLI (`bin/flow-tools.cjs` `task-add` / `task-get` / `task-list` / `task-set-status` / `task-next`, and `bin/task-master` for the AI ops). The native engine was already the only binding and the CLI twins have shipped since 0.8.x; what is gone is a second way in that could fail to connect, bind a stale surface, or shadow the engine from a project `.mcp.json`.
+
+- `commands/init.md` no longer prefers an `initialize_project` MCP tool — the CLI bin is the only path.
+- `agents/hybrid-executor.md` names `flow-tools.cjs task-get` instead of `mcp__task-master-ai__get_task`.
+- `/sf:doctor` `dep-lock` now verifies the CLI entry points exist and warns if an `.mcp.json` reappears at the plugin root. `mcp-shadow` now warns about **any** project-level `task-master-ai` entry, including the old "native" shape: with no server shipped, such an entry binds a separate implementation writing the same `.taskmaster/` files.
+
+`bin/mcp-server.js` and `lib/mcp-server.cjs` are retained but no longer referenced by any binding — the rollback and cutover machinery still exercises them on temp files. Removing them is a separate cleanup.
+
+Full suite green: 910 engine tests (`node --test test/*.test.cjs`, +3) and 80 checklist-runner tests (`python3 -m unittest checklist_lib.tests.test_checklist_lib`, +8).
+
 ## [0.10.1] — 2026-09-11
 
 Four bugs surfaced by running `/sf:ingest` against a real SRS in a downstream project, all in the Pass-1 deterministic harvest and the traceability engine. None block a fix directly in code — `bin/flow-tools.cjs`, `lib/core.cjs`, `lib/trace.cjs`.
