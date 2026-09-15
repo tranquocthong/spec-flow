@@ -368,13 +368,14 @@ test('(k) real repo bindings are untouched after all rollback test operations', 
   const realConfig = path.join(repoRoot, '.spec-flow', 'config.json');
   const realMcp = path.join(repoRoot, '.mcp.json');
 
-  // Read real config — must NOT have taskCore.engine = 'legacy' changed by tests
-  // (the real repo does not have taskCore set at all in .spec-flow/config.json,
-  // or if it exists it is not 'legacy' from our tests)
-  const config = JSON.parse(fs.readFileSync(realConfig, 'utf8'));
-  // Just verify the file is valid JSON and not corrupted by our tests
-  assert.ok(typeof config === 'object' && config !== null, 'real config must be a valid object');
-  assert.ok(config.project === 'spec-flow', 'real config project must still be spec-flow');
+  // A developer may have a local .spec-flow profile, but it is gitignored and
+  // absent in a clean CI checkout. When present, only verify that test helpers
+  // did not corrupt it; never require local project state for this suite.
+  if (fs.existsSync(realConfig)) {
+    const config = JSON.parse(fs.readFileSync(realConfig, 'utf8'));
+    assert.ok(typeof config === 'object' && config !== null, 'real config must be a valid object');
+    assert.ok(config.project === 'spec-flow', 'real config project must still be spec-flow');
+  }
 
   // The repo declares no MCP server any more. The rollback/cutover paths still
   // know how to write an .mcp.json — they must only ever do so in temp dirs.
