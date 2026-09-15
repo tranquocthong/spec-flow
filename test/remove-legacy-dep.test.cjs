@@ -320,7 +320,7 @@ test('(h) dryRun:true with both changes needed — writes nothing', async () => 
 // (i) Real DEPENDENCIES.md and .mcp.json are untouched after all test operations
 // ---------------------------------------------------------------------------
 
-test('(i) real DEPENDENCIES.md and .mcp.json are untouched after all test operations', () => {
+test('(i) real DEPENDENCIES.md is untouched and no .mcp.json was recreated', () => {
   const repoRoot = path.resolve(__dirname, '..');
   const realDeps = path.join(repoRoot, 'DEPENDENCIES.md');
   const realMcp = path.join(repoRoot, '.mcp.json');
@@ -329,10 +329,10 @@ test('(i) real DEPENDENCIES.md and .mcp.json are untouched after all test operat
   assert.ok(typeof depsContent === 'string' && depsContent.length > 0, 'real DEPENDENCIES.md must be a non-empty string');
   assert.ok(depsContent.includes('# spec-flow'), 'real DEPENDENCIES.md must still have the project heading');
 
-  const mcpContent = fs.readFileSync(realMcp, 'utf8');
-  const mcp = JSON.parse(mcpContent);
-  assert.ok(typeof mcp === 'object' && mcp !== null, 'real .mcp.json must be a valid object');
-  assert.ok(mcp.mcpServers, 'real .mcp.json must have mcpServers');
+  // The plugin declares no MCP server: .mcp.json was removed from the repo root.
+  // These tests write only to temp dirs, so none of them may bring it back.
+  assert.ok(!fs.existsSync(realMcp),
+    'no .mcp.json at the repo root — the plugin ships no MCP server, and no test may recreate one');
 });
 
 // ---------------------------------------------------------------------------

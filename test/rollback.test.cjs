@@ -376,9 +376,8 @@ test('(k) real repo bindings are untouched after all rollback test operations', 
   assert.ok(typeof config === 'object' && config !== null, 'real config must be a valid object');
   assert.ok(config.project === 'spec-flow', 'real config project must still be spec-flow');
 
-  const mcp = JSON.parse(fs.readFileSync(realMcp, 'utf8'));
-  // The real .mcp.json should still be the legacy npx entry (the cutover tests
-  // should have left it unchanged since they use temp dirs)
-  assert.ok(typeof mcp === 'object' && mcp !== null, 'real .mcp.json must be a valid object');
-  assert.ok(mcp.mcpServers, 'real .mcp.json must have mcpServers');
+  // The repo declares no MCP server any more. The rollback/cutover paths still
+  // know how to write an .mcp.json — they must only ever do so in temp dirs.
+  assert.ok(!fs.existsSync(realMcp),
+    'no .mcp.json at the repo root — rollback/cutover tests must not write one here');
 });

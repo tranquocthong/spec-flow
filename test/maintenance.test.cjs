@@ -112,9 +112,10 @@ test('doctor: always returns ok with a checks array (reports, never throws)', ()
   });
 });
 
-// mcp-shadow: a project-level .mcp.json "task-master-ai" entry overrides the plugin's
-// bundled native server. A legacy/core-tier entry there exposes no add_task — doctor must warn.
-test('doctor: warns when a project .mcp.json shadows the bundled task engine with a legacy entry', () => {
+// mcp-shadow: spec-flow ships no MCP server, so a project-level .mcp.json
+// "task-master-ai" entry binds a separate implementation that writes the same
+// .taskmaster/ files. Doctor must warn and point at the CLI twins.
+test('doctor: warns when a project .mcp.json still declares task-master-ai', () => {
   inTmp(() => {
     maintenance['init-project']({ stack: 'node' });
     fs.writeFileSync('.mcp.json', JSON.stringify({
@@ -129,12 +130,12 @@ test('doctor: warns when a project .mcp.json shadows the bundled task engine wit
     const shadow = maintenance.doctor({}).data.checks.find(c => c.name === 'mcp-shadow');
     assert.ok(shadow, 'mcp-shadow check must be present');
     assert.equal(shadow.status, 'warn');
-    assert.match(shadow.detail, /add_task/);
+    assert.match(shadow.detail, /ships no MCP server/);
     assert.match(shadow.fix, /task-add/);
   });
 });
 
-test('doctor: mcp-shadow is ok when the project .mcp.json binds the native server or has no TM entry', () => {
+test('doctor: mcp-shadow is ok when the project .mcp.json has no task-master-ai entry', () => {
   inTmp(() => {
     maintenance['init-project']({ stack: 'node' });
 
@@ -142,12 +143,25 @@ test('doctor: mcp-shadow is ok when the project .mcp.json binds the native serve
     const noEntry = maintenance.doctor({}).data.checks.find(c => c.name === 'mcp-shadow');
     assert.equal(noEntry.status, 'ok');
 
+    // Even the old "native" shape is now a stale binding: the plugin no longer
+    // ships bin/mcp-server.js as a declared server, so pointing at it is not ok.
     fs.writeFileSync('.mcp.json', JSON.stringify({
       mcpServers: { 'task-master-ai': { command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/bin/mcp-server.js'] } },
     }));
-    const native = maintenance.doctor({}).data.checks.find(c => c.name === 'mcp-shadow');
-    assert.equal(native.status, 'ok');
-    assert.match(native.detail, /native task engine/);
+    const stale = maintenance.doctor({}).data.checks.find(c => c.name === 'mcp-shadow');
+    assert.equal(stale.status, 'warn');
+  });
+});
+
+// dep-lock: the engine is CLI-only now; the check must confirm the bins exist and
+// that no .mcp.json has reappeared at the plugin root to re-expose an MCP surface.
+test('doctor: dep-lock reports the CLI task engine with no MCP binding declared', () => {
+  inTmp(() => {
+    maintenance['init-project']({ stack: 'node' });
+    const depLock = maintenance.doctor({}).data.checks.find(c => c.name === 'dep-lock');
+    assert.ok(depLock, 'dep-lock check must be present');
+    assert.equal(depLock.status, 'ok');
+    assert.match(depLock.detail, /no MCP binding declared/);
   });
 });
 

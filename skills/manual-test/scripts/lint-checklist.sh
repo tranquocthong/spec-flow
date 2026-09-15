@@ -140,6 +140,25 @@ for si, suite in enumerate(suites):
             hint = "a bare expect.status is not a sufficient assertion — also assert the response body" if has_status else "add an assertion"
             issues.append(f"$.suites[{si}].tests[{ti}] ({t.get('id','?')}): {hint}. Use expect.body / body_contains / json_path (incl. error-body for rejection tests), a verify: block (mutation), expect.poll (async), OR tag the test no-verify (assertion-only) / live-e2e (no HTTP surface).")
 
+# Negative-path coverage. The per-test rule above asks "does this test assert
+# anything"; it never asks "does this checklist ever exercise a rejection". A
+# suite that only walks happy paths passes every gate while the error branches —
+# where the error codes and the guard clauses live — are never touched once.
+# A warning, not a failure: it is a coverage signal about the SD's test cases,
+# and existing checklists must stay runnable while their SD §13.2 is filled in.
+_total = sum(len(su.get("tests") or []) for su in suites)
+_negative = 0
+for _su in suites:
+    for _t in _su.get("tests") or []:
+        _e = _t.get("expect") or {}
+        if isinstance(_e, dict) and isinstance(_e.get("status"), int) and _e["status"] >= 400:
+            _negative += 1
+if _total >= 5 and _negative == 0:
+    print(f"  ! no negative-path test: none of {_total} test cases assert a rejection "
+          f"(expect.status >= 400). Happy paths alone leave every error code and guard "
+          f"clause unexercised — check SD §13.2 for the rejection cases and add them.",
+          file=sys.stderr)
+
 if issues:
     for it in issues:
         print(f"  ✗ {it}", file=sys.stderr)

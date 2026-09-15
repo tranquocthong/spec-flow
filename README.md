@@ -313,7 +313,7 @@ New features (post-adoption) get the full flow from day one. **Adopt forward, no
 | `verify-code [--feature <f>] [--repos "a,b"]` | **generic quality gate**: run tests, check coverage threshold, scan for forbidden patterns + secrets — driven by `.spec-flow/config.json → verify`; skips gracefully when unconfigured. **Multi-repo:** `--feature`/`--repos` scopes the scan to the repos that feature touched (from `file-links.json`) so an unrelated repo's red WIP can't poison the gate. **Mixed build tools:** each repo resolves its own `stack`/`verify` — per-repo override via `config.repos["x"] = { path, stack, verify }`, else auto-detected when the project `testCommand` cannot run in that root |
 | `status-report [--feature <f>]` | pure-read status aggregate: project, branch, feature, SD, tasks, trace, ready-set, verification, open bugs/changes, latest snapshot + a deterministic `nextStep` — the data source behind `/sf:status` |
 | `doctor [--sd <SD.md>] [--feature <f>]` | **health check**: env · plugin files · version sync (`plugin.json` vs `marketplace.json`) · install state · project init · trace health · SD gate · tasks info · `currentTag` drift (silent for a shipped feature) · task-engine MCP binding (warns when a project `.mcp.json` shadows the bundled native server) |
-| `task-add --title <t> [--tag <tag>] [--description <d>] [--details <d>] [--priority high\|medium\|low]` | create a task in the tag (id auto-assigned); the deterministic twin of MCP `add_task` — use it when a project `.mcp.json` shadows the bundled server with a core-tier `task-master-ai` that has no `add_task`. Omitted `--tag` falls back to `.taskmaster/state.json → currentTag` |
+| `task-add --title <t> [--tag <tag>] [--description <d>] [--details <d>] [--priority high\|medium\|low]` | create a task in the tag (id auto-assigned). This is how tasks are created — the plugin ships no MCP server, so there is no `add_task` tool. Omitted `--tag` falls back to `.taskmaster/state.json → currentTag` |
 | `task-get --tag <tag> --id <id>` | read one task (twin of MCP `get_task`); returns `data:null` when not found, never an error |
 | `task-list --tag <tag> [--status <s>]` | list a tag's tasks + stats (twin of MCP `get_tasks`) |
 | `task-set-status --tag <tag> --id <id> --status <s>` | set a task/subtask status (twin of MCP `set_task_status`) |
@@ -431,7 +431,6 @@ lib/subtask-manager.cjs  SubtaskManager — hierarchical id derivation, computeC
 lib/expand-hook.cjs      ExpandHook — validate + delegate structured subtask lists to SubtaskManager (sub 2/5)
 templates/        sd-template.md · srs-template.md · lang/{en,vi}.json (SRS-parse keyword packs)
 test/             *.test.cjs — flow-tools (CLI) · core · maintenance unit suites (`node --test test/*.test.cjs`)
-.mcp.json         wires the native task engine MCP server (bin/mcp-server.js, zero-network)
 ```
 
 **Created in the target project**
@@ -449,7 +448,7 @@ test/             *.test.cjs — flow-tools (CLI) · core · maintenance unit su
 
 <details><summary><b>Dependencies</b> (locked)</summary>
 
-All dependencies are pinned — updates are deliberate and tested, never automatic. The task engine (`bin/mcp-server.js`, `bin/task-master`) is a self-built, zero-network, zero-external-dependency core — no `task-master-ai` package is fetched or installed.
+All dependencies are pinned — updates are deliberate and tested, never automatic. The task engine (`bin/flow-tools.cjs`, `bin/task-master`) is a self-built, zero-network, zero-external-dependency core driven entirely through its CLI — the plugin declares no MCP server, and no `task-master-ai` package is fetched or installed.
 
 | Dependency | How | Pinned version |
 | --- | --- | --- |
