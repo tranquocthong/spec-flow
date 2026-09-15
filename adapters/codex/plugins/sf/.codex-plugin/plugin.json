@@ -1,0 +1,22 @@
+{
+  "name": "sf",
+  "version": "0.11.0",
+  "description": "Spec-flow for Codex: shared specs, tasks, verification and checkpoints.",
+  "author": {
+    "name": "Travis Tran",
+    "url": "https://github.com/tranquocthong"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Spec Flow",
+    "shortDescription": "Continue spec-driven projects in Codex.",
+    "longDescription": "Use the shared Spec Flow engine and existing project artifacts with Codex.",
+    "developerName": "Travis Tran",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": [
+      "Use $sf-status to resume this project."
+    ]
+  },
+  "license": "MIT"
+}

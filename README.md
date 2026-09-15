@@ -1,6 +1,6 @@
 # spec-flow
 
-**Turn a messy SRS — or just an idea — into a reviewed Solution Design, then implementation that traces back to every line of it.** Spec-driven, but *adaptive*: small changes skip the ceremony, big ones get the rigor. A standalone **Claude Code plugin**.
+**Turn a messy SRS — or just an idea — into a reviewed Solution Design, then implementation that traces back to every line of it.** Spec-driven, but *adaptive*: small changes skip the ceremony, big ones get the rigor. Works with Claude Code and Codex while preserving the same project artifacts.
 
 ```
 SRS / idea  →  SD  →  (adaptive) implement  →  manual-test verify  →  ship
@@ -9,7 +9,7 @@ SRS / idea  →  SD  →  (adaptive) implement  →  manual-test verify  →  sh
  └─────────────────────  /sf:change  (you change your mind) ───────────
 ```
 
-[![release](https://img.shields.io/github/v/release/tranquocthong/claude-spec-flow)](https://github.com/tranquocthong/claude-spec-flow/releases)
+[![release](https://img.shields.io/github/v/release/tranquocthong/spec-flow)](https://github.com/tranquocthong/spec-flow/releases)
 
 ## What you get
 
@@ -18,9 +18,15 @@ SRS / idea  →  SD  →  (adaptive) implement  →  manual-test verify  →  sh
 - **Real traceability** — SRS§ → SD → FR/TC → task → **source file**. Change one thing and see everything it touches.
 - **Change-driven loops** — Product edits the SRS → `resync`; you change your mind → `change`; a bug → `bug` (works even with **no SD**, for brownfield).
 - **Local-first verification** — the bundled manual-test harness (curl/Kafka + DB/Redis) gates every task; nothing reaches `done` unverified.
-- **Yours, portable** — per-project state is plain markdown/json committed with your repo. No DB, no server, no lock-in. Keyless by default (runs through your Claude Code session).
+- **Yours, portable** — per-project state is plain markdown/json committed with your repo. No DB, no server, no lock-in. Agent-native task generation uses the active Claude Code or Codex session.
 
-## Install
+## Codex support
+
+Use the same project artifacts in Codex with the generated SF plugin. See the
+[Codex build, installation and release guide](docs/codex.md). Claude Code and
+Codex share the workflow sources and project artifacts.
+
+## Install in Claude Code
 
 ```
 /plugin marketplace add tranquocthong/claude-spec-flow
@@ -32,12 +38,12 @@ Reload Claude Code, then verify: **`/sf:doctor`**. Prereqs: node ≥ 18; python3
 
 ```
 # Team (private marketplace)
-/plugin marketplace add git@<your-git-host>:<org>/claude-spec-flow.git
+/plugin marketplace add git@<your-git-host>:<org>/spec-flow.git
 /plugin install sf
 
 # Zero-install — the engine is plain Node, runnable without the plugin:
-node <path>/claude-spec-flow/bin/flow-tools.cjs doctor
-node <path>/claude-spec-flow/bin/flow-tools.cjs sd-skeleton --srs <your-srs.md> --feature demo
+node <path>/spec-flow/bin/flow-tools.cjs doctor
+node <path>/spec-flow/bin/flow-tools.cjs sd-skeleton --srs <your-srs.md> --feature demo
 ```
 `ANTHROPIC_API_KEY` / `PERPLEXITY_API_KEY` are optional — only if you prefer your own provider.
 </details>

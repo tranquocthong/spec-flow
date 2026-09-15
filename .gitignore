@@ -7,3 +7,6 @@ node_modules/
 # Python bytecode (manual-test runner lib)
 __pycache__/
 *.pyc
+
+# Generated Codex distribution
+/dist/codex/
