@@ -1,14 +1,14 @@
 # spec-flow
 
-**Spec-driven development for the spec you were handed.**
+**AI writes the code. Something has to keep the receipts.**
 
 [![release](https://img.shields.io/github/v/release/tranquocthong/spec-flow)](https://github.com/tranquocthong/spec-flow/releases)
 [![license](https://img.shields.io/github/license/tranquocthong/spec-flow)](LICENSE)
 [![codex release](https://github.com/tranquocthong/spec-flow/actions/workflows/codex-release.yml/badge.svg)](https://github.com/tranquocthong/spec-flow/actions/workflows/codex-release.yml)
 
-Most spec-driven tools assume you write the spec together with the AI. Plenty of teams don't
-work that way. A BA, a product owner or a client hands you a forty-page SRS, and months later
-someone asks whether FR-014 was implemented and how you know.
+Spec-driven development for teams who are handed their requirements rather than writing
+them. A BA, a product owner or a client sends you an SRS; months later someone asks whether
+FR-014 was implemented, and how you know.
 
 spec-flow takes that SRS — messy, inconsistently shaped, English or Vietnamese — and turns it
 into a Solution Design you approve once. From there the agent implements each requirement,
