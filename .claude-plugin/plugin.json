@@ -1,7 +1,7 @@
 {
   "name": "sf",
-  "version": "0.11.1",
-  "description": "Spec-driven dev for Claude Code: a messy SRS (or just an idea) -> a reviewed Solution Design -> adaptive implementation that traces back to every line. Change-driven resync/change/bug loops, local-first manual-test verification, keyless via Task Master. No lock-in.",
+  "version": "0.12.0",
+  "description": "Spec-driven development for the spec you were handed. Turns an SRS someone else wrote into a Solution Design you approve once, then implements it with a durable trace from every requirement to the source file and the test that proves it. Claude Code and Codex. No API key, no server, no lock-in.",
   "author": {
     "name": "Travis Tran",
     "url": "https://github.com/tranquocthong"
@@ -16,6 +16,10 @@
     "manual-test",
     "traceability",
     "commit",
-    "git-workflow"
+    "git-workflow",
+    "code-review",
+    "requirements-traceability",
+    "claude-code",
+    "codex"
   ]
 }

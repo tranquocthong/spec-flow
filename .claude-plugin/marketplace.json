@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "Marketplace for spec-flow — a spec-driven workflow plugin for Claude Code.",
-    "version": "0.11.1"
+    "version": "0.12.0"
   },
   "plugins": [
     {
       "name": "sf",
       "source": "./",
-      "description": "Turn a messy SRS - or just an idea - into a reviewed Solution Design, then traceable, adaptive implementation. Spec-driven with change-driven resync/change/bug loops + branch-per-SD; bundles manual-test + commit; keyless via Task Master, no lock-in.",
+      "description": "Spec-driven development for the spec you were handed. Turns an SRS someone else wrote into a Solution Design you approve once, then implements it with a durable trace from every requirement to the source file and the test that proves it. Claude Code and Codex. No API key, no server, no lock-in.",
       "category": "workflow"
     }
   ],
