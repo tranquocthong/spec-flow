@@ -1,12 +1,22 @@
 # spec-flow
 
-**Spec-driven development for Claude Code and Codex.** Feed it a messy SRS, or just an idea, and it produces a reviewed Solution Design (SD), then implements each requirement with a trace from the SRS line to the source file, gated by local manual tests before anything is marked done.
-
-Spec-driven, but adaptive: small work skips the ceremony, big work gets the rigor. No API key, no server, no database. Everything it writes is plain markdown and JSON committed next to your code.
+**Spec-driven development for the spec you were handed.**
 
 [![release](https://img.shields.io/github/v/release/tranquocthong/spec-flow)](https://github.com/tranquocthong/spec-flow/releases)
 [![license](https://img.shields.io/github/license/tranquocthong/spec-flow)](LICENSE)
 [![codex release](https://github.com/tranquocthong/spec-flow/actions/workflows/codex-release.yml/badge.svg)](https://github.com/tranquocthong/spec-flow/actions/workflows/codex-release.yml)
+
+Most spec-driven tools assume you write the spec together with the AI. Plenty of teams don't
+work that way. A BA, a product owner or a client hands you a forty-page SRS, and months later
+someone asks whether FR-014 was implemented and how you know.
+
+spec-flow takes that SRS — messy, inconsistently shaped, English or Vietnamese — and turns it
+into a Solution Design you approve once. From there the agent implements each requirement,
+records which source file satisfied it, and refuses to mark anything done until a real test
+actually ran and asserted something.
+
+So the answer to "is FR-014 done?" is a file, a task, a test run and a timestamp. Not a
+recollection of a chat session.
 
 ```
 SRS / idea  ->  SD (you approve)  ->  adaptive implement  ->  manual-test  ->  ship
@@ -16,9 +26,19 @@ SRS / idea  ->  SD (you approve)  ->  adaptive implement  ->  manual-test  ->  s
                                /sf:bug      something is broken (SD optional)
 ```
 
+Adaptive, not ceremonial: small work skips the process, big work gets the rigor. No API key,
+no server, no database, no MCP. Everything it writes is plain markdown and JSON, committed
+next to your code.
+
+```
+/plugin marketplace add tranquocthong/spec-flow
+/plugin install sf@claude-spec-flow
+```
+
 ## Table of contents
 
 - [Why](#why)
+- [How it compares](#how-it-compares)
 - [Install](#install)
 - [Five-minute tour](#five-minute-tour)
 - [Which command do I run?](#which-command-do-i-run)
@@ -45,6 +65,29 @@ What that buys you:
 - **Nothing reaches `done` unverified.** A bundled manual-test harness (HTTP, Kafka, SQL, Redis, shell) runs a `CHECKLIST.yaml` per feature. A test that asserts nothing is reported as not verified, never as passed.
 - **Keyless and offline.** The task engine is a bundled, zero-dependency Node CLI. AI steps run inside your active Claude Code or Codex session. No MCP server, no package fetch, no key.
 - **Brownfield safe.** It never fakes an SD for code that predates it. Legacy bugs get tracked fixes with a repro test as the contract.
+
+## How it compares
+
+The spec-driven space is crowded and the good tools are genuinely good. They mostly solve the
+*front* of the problem: turning your idea into a structured plan an agent can execute.
+[spec-kit](https://github.com/github/spec-kit) and [BMAD-METHOD](https://github.com/bmad-code-org/BMAD-METHOD)
+are excellent at that. If you are starting from your own idea on a greenfield repo, use them.
+
+spec-flow is built for the other shape of the problem: the spec arrived from someone else, and
+you will be asked to prove what happened to it.
+
+| | spec-kit | BMAD-METHOD | spec-flow |
+| --- | --- | --- | --- |
+| Starting point | an idea you describe to the agent | an idea, refined through specialist perspectives | an SRS someone else wrote, any shape, EN or VI — or an idea, via an interview |
+| Who owns the spec | generated, you edit the markdown | generated across planning phases | you approve one Solution Design, explicitly, before any task is seeded |
+| Spec changes after build | refine the artifacts and re-run | re-enter the planning loop | diff against a frozen snapshot; only the impacted FR/TC/tasks reopen |
+| Requirement-to-code trace | not a documented goal | not a documented goal | durable `trace.json`: SRS to SD to FR/TC to task to source file |
+| Completion gate | convergence loop; bug extension verifies fixes | verify phase, not test-gated | bundled runner (HTTP, Kafka, SQL, Redis, shell). A test that asserts nothing is `notVerified`, never passed |
+| Brownfield / legacy code | greenfield-leaning | greenfield-leaning | refuses to retro-generate an SD; legacy bugs get a repro test as the contract |
+| Runtime | CLI plus your agent | markdown and YAML assets | zero-dependency Node CLI. No key, no server, no MCP, no network |
+
+Comparison written from each project's public documentation in September 2026. If something is
+wrong or out of date, open an issue and it gets fixed.
 
 ## Install
 
@@ -141,6 +184,10 @@ No SRS is the normal case. Run `/sf:ingest` bare and it asks about the actor, th
         |
    regression run       checklist-to-verification hook writes VERIFICATION.md
         |
+   code review          OPTIONAL gate, asks you yes/no first: an independent sub-agent
+                        reviews the branch diff, review-collect writes CODE-REVIEW.md
+                        critical/high halts the ship and hands you the decision
+        |
    ship                 commit + push on the feature branch, PR/MR link surfaced
 ```
 
@@ -205,7 +252,8 @@ For code written before you adopted spec-flow, do not retro-generate an SD. The 
 3. **`CHECKLIST.yaml` exists before the first task is implemented.**
 4. **`verify-code` runs before every smoke run.** Tests, coverage threshold, forbidden patterns, secret scan, driven by config. Unconfigured means skipped, not blocked.
 5. **`review` becomes `done` only after smoke passes.** A feature ships only when regression passes and `VERIFICATION.md` reads `status: passed`. A test that executed nothing is `notVerified`, and holds the status at `incomplete`.
-6. **The SD is the source of truth.** Change the SD, then propagate. Never patch code without patching the SD.
+6. **The pre-ship code review is optional, but its verdict is not.** `config.phase.codeReview` decides whether it runs (`ask` by default, so you are asked once per ship). Skipping it is silent. Running it and finding critical or high issues halts the ship until you fix them or record the override with `review-accept`, and `/sf:status` keeps surfacing an unaccepted blocking verdict across sessions.
+7. **The SD is the source of truth.** Change the SD, then propagate. Never patch code without patching the SD.
 
 ## What lands in your repo
 
@@ -312,6 +360,9 @@ Two CLIs ship in `bin/`. Both are zero-network and print one JSON line per call.
 | | `drift-check --feature` | error codes in code versus SD section 12.2, `spec-not-evidenced` and `impl-not-specced` |
 | Verify | `verify-collect --results` | runner output into `VERIFICATION.md` truths, `notVerified` holds status at `incomplete` |
 | | `verify-code [--feature] [--repos]` | tests, coverage, forbidden patterns, secret scan, scoped to the repos a feature touched |
+| Review | `review-scope [--feature]` | whether the optional pre-ship review runs (`config.phase.codeReview`: ask, always, off) and over what: base branch, `<base>...HEAD`, the files from `file-links.json`, plus any prior verdict and whether HEAD moved past it |
+| | `review-collect --feature --findings [--target]` | reviewer findings into `CODE-REVIEW.md`, verdict `clean`, `advisory` or `blocking` (any critical/high) |
+| | `review-accept --feature --note` | record that a human chose to ship with open blocking findings |
 | State | `state-update --feature [--note] [--shipped]` | refresh per-feature `STATE.md` plus the mirror |
 | | `checkpoint-write` / `checkpoint-clear` | mid-task checkpoint |
 | | `task-baseline --feature [--apply]` | mark tasks done from verification evidence only, dry-run by default |
@@ -363,8 +414,8 @@ test/              node --test test/*.test.cjs
 Current release is in the badge above. Every version is a git tag on `main` and has an entry in [CHANGELOG.md](CHANGELOG.md), which records the bugs each release found and how they were verified.
 
 ```sh
-node --test test/*.test.cjs                                     # 916 engine tests
-cd skills/manual-test/scripts && python3 -m unittest checklist_lib.tests.test_checklist_lib   # 80 runner tests
+node --test test/*.test.cjs                                     # 961 engine tests
+cd skills/manual-test/scripts && python3 -m unittest checklist_lib.tests.test_checklist_lib   # 82 runner tests
 node scripts/build-codex.cjs && node scripts/validate-codex.cjs # Codex distribution
 ```
 
