@@ -33,6 +33,13 @@ Claude source; these runtime mappings apply to all of them.
 - `$sf-init` uses the shared init procedure with Codex provider setup. The engine
   defaults to `agent-native`; Codex is the host. Keep existing model settings
   untouched. Missing Claude CLI is not a prerequisite failure for this mode.
+- The optional pre-ship review step names a host `code-review` skill. That skill is
+  a Claude Code built-in and is NOT part of this package. When Codex has no
+  equivalent, perform the review yourself against the step's own output contract
+  (severity/title/file/line/category/detail) — read-only, report only, never fix.
+  Keep the gate's shape either way: `review-scope` decides whether to run and asks
+  the user when it returns `gate: ask`, and `review-collect` is what makes the
+  result real. A review you performed but did not collect did not happen.
 - Bare `scripts/*.sh` in a procedure refers to the bundled testing helpers at
   `${SPEC_FLOW_ROOT}/skills/sf-testing/scripts/`, not a target project's scripts.
   Read `$sf-testing` for stack/auth/checklist details. `$sf-manual-test` runs the
