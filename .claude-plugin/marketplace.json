@@ -11,7 +11,7 @@
     {
       "name": "sf",
       "source": "./",
-      "description": "Requirements in, tested code out. One design you approve, one task per requirement, and a trace from each to the file and the test that cover it.",
+      "description": "Turns a requirements document into a design you approve, then implements it and records which file and which test cover each requirement.",
       "category": "workflow"
     }
   ],
