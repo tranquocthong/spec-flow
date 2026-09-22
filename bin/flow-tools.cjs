@@ -11,6 +11,7 @@
  *
  * Commands: init, srs-snapshot, sd-skeleton, route, checklist-gen, trace-build, trace-impact,
  *           trace-repos, trace-link, srs-diff, state-update, verify-collect, verify-code, wave-plan,
+ *           review-scope, review-collect, review-accept,
  *           task-baseline, taskmaster-model-plan, taskmaster-model-check,
  *           epic-new, epic-list, bug-new, bug-list, branch-ensure,
  *           learn, doctor, status-report
@@ -30,12 +31,14 @@ const subtaskManager = require('../lib/subtask-manager.cjs');
 const { expandHook } = require('../lib/expand-hook.cjs');
 const trace = require('../lib/trace.cjs');
 const verify = require('../lib/verify.cjs');
+const review = require('../lib/review.cjs');
 const taskCli = require('../lib/task-cli.cjs');
 
 // =====================================================================
 //  COMMANDS (workflow). Static commands live in lib/maintenance.cjs; the
 //  semantic drift-check in lib/drift.cjs; traceability in lib/trace.cjs;
-//  the verification gates in lib/verify.cjs; the task CLI in lib/task-cli.cjs.
+//  the verification gates in lib/verify.cjs; the OPTIONAL pre-ship code-review
+//  gate in lib/review.cjs; the task CLI in lib/task-cli.cjs.
 //  All are spread below — one flat command table, one dispatcher.
 // =====================================================================
 /**
@@ -63,6 +66,7 @@ const commands = {
   ...drift,
   ...trace,
   ...verify,
+  ...review,
   ...taskCli,
   'srs-snapshot'(args) {
     const src = args.srs;
@@ -1461,6 +1465,27 @@ const commands = {
       } catch {}
     }
 
+    // Optional pre-ship code review (config.phase.codeReview). Surfaced so an
+    // unresolved `blocking` verdict cannot be forgotten between sessions — the
+    // review is optional, but once it HAS run its result is disk truth like any
+    // other gate. null = the gate never ran for this feature.
+    let codeReview = null;
+    if (featureName) {
+      const existingReview = review.internals.readExistingReview(featureName);
+      if (existingReview) {
+        codeReview = {
+          status: existingReview.status,
+          accepted: existingReview.accepted,
+          counts: existingReview.counts,
+          reviewedAt: existingReview.reviewedAt,
+          // Stale = HEAD moved since the review; its verdict no longer covers the tip.
+          stale: !!(existingReview.head && existingReview.head !== (() => {
+            try { return execSync('git rev-parse HEAD', { stdio: 'pipe', timeout: 3000 }).toString().trim(); } catch { return null; }
+          })()),
+        };
+      }
+    }
+
     // Latest SRS snapshot
     let latestSnapshot = null;
     if (featureName && fs.existsSync(PATHS.snapshots)) {
@@ -1566,6 +1591,14 @@ const commands = {
       nextStep = `Resume checkpoint: task ${checkpoint.task}${phasePart} — read \`.spec-flow/specs/${featureName}/checkpoint.md\` then continue. Or \`/sf:phase ${featureName}\` to let it re-drive.`;
     }
 
+    // An unaccepted blocking review outranks whatever the ladder decided. It is the
+    // whole point of the gate: the verdict must survive a context reset and keep
+    // asking, wherever the feature happens to sit in the flow. Advisory and clean
+    // verdicts, and one the user explicitly accepted, stay silent.
+    if (codeReview && codeReview.status === 'blocking' && !codeReview.accepted) {
+      nextStep = `Code review is BLOCKING (${codeReview.counts.critical} critical · ${codeReview.counts.high} high) — read \`.spec-flow/specs/${featureName}/CODE-REVIEW.md\`, then fix, or accept with \`review-accept --feature ${featureName} --note "<why>"\`. Then: ${nextStep}`;
+    }
+
     // In-flight resume hints take priority — surface started-but-open bug/change
     // work with the exact resume command (id from the record → no guessing).
     const resume = [];
@@ -1587,6 +1620,7 @@ const commands = {
       ready: ready.length > 0 ? ready : null,
       verified,
       verifiedGaps,
+      codeReview,
       latestSnapshot,
       bugsOpen,
       changesOpen,

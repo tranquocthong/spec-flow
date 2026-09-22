@@ -3557,6 +3557,87 @@ test('status-report: surfaces the ship marker', () => {
   assert.equal(after.data.shipped.ref, 'deadbee');
 });
 
+test('status-report: codeReview is null until the optional gate has actually run', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  shippableFeature(dir, 'demo');
+  fs.writeFileSync(path.join(dir, '.spec-flow', 'trace.json'),
+    JSON.stringify({ feature: 'demo', nodes: {}, links: [] }));
+  const r = run(['status-report', '--feature', 'demo'], dir);
+  assert.equal(r.data.codeReview, null, 'an un-run review is not a clean one');
+  assert.match(r.data.nextStep, /ship: stage/);
+});
+
+test('status-report: an unaccepted blocking review outranks "go ship" in nextStep', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  shippableFeature(dir, 'demo');
+  fs.writeFileSync(path.join(dir, '.spec-flow', 'trace.json'),
+    JSON.stringify({ feature: 'demo', nodes: {}, links: [] }));
+  run(['review-collect', '--feature', 'demo', '--findings',
+    '{"findings":[{"severity":"critical","title":"refund double-spend","checkedAgainst":"FR-007"}]}'], dir);
+
+  const r = run(['status-report', '--feature', 'demo'], dir);
+  assert.equal(r.data.codeReview.status, 'blocking');
+  assert.equal(r.data.codeReview.accepted, false);
+  assert.equal(r.data.codeReview.counts.critical, 1);
+  // The whole point of the gate: it must survive a context reset, not just the turn
+  // that produced it.
+  assert.match(r.data.nextStep, /Code review is BLOCKING/);
+  assert.match(r.data.nextStep, /CODE-REVIEW\.md/);
+});
+
+test('status-report: a blocking review is surfaced even when the ladder is nowhere near the ship', () => {
+  // REGRESSION (found by dogfooding on a real project): the warning used to live in
+  // the "done + verified" branch only, so a feature with no tasks seeded reported
+  // "seeds tasks" while an unaccepted blocking verdict sat on disk, unmentioned.
+  const dir = tmpProject();
+  initProject(dir);
+  const d = path.join(dir, '.spec-flow', 'specs', 'demo');
+  fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(d, 'SD.md'), '# SD\n\nno todos here\n');
+  fs.writeFileSync(path.join(dir, '.spec-flow', 'trace.json'),
+    JSON.stringify({ feature: 'demo', nodes: {}, links: [] }));
+  run(['review-collect', '--feature', 'demo', '--findings',
+    '{"findings":[{"severity":"critical","title":"x","checkedAgainst":"FR-001"}]}'], dir);
+
+  const r = run(['status-report', '--feature', 'demo'], dir);
+  assert.equal(r.data.tasks, null, 'no tasks seeded — the ladder exits long before the ship branch');
+  assert.match(r.data.nextStep, /^Code review is BLOCKING/, 'the verdict leads, whatever the ladder said');
+  assert.match(r.data.nextStep, /Then: /, 'and the ladder advice is kept, not discarded');
+});
+
+test('status-report: an accepted blocking review stops nagging', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  shippableFeature(dir, 'demo');
+  fs.writeFileSync(path.join(dir, '.spec-flow', 'trace.json'),
+    JSON.stringify({ feature: 'demo', nodes: {}, links: [] }));
+  run(['review-collect', '--feature', 'demo', '--findings',
+    '{"findings":[{"severity":"high","title":"x","checkedAgainst":"none"}]}'], dir);
+  run(['review-accept', '--feature', 'demo', '--note', 'false positive, covered by TC-014'], dir);
+
+  const r = run(['status-report', '--feature', 'demo'], dir);
+  assert.equal(r.data.codeReview.status, 'blocking');
+  assert.equal(r.data.codeReview.accepted, true);
+  assert.doesNotMatch(r.data.nextStep, /Code review is BLOCKING/);
+});
+
+test('status-report: an advisory review never blocks the ship step', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  shippableFeature(dir, 'demo');
+  fs.writeFileSync(path.join(dir, '.spec-flow', 'trace.json'),
+    JSON.stringify({ feature: 'demo', nodes: {}, links: [] }));
+  run(['review-collect', '--feature', 'demo', '--findings',
+    '{"findings":[{"severity":"medium","title":"duplicated parser"}]}'], dir);
+
+  const r = run(['status-report', '--feature', 'demo'], dir);
+  assert.equal(r.data.codeReview.status, 'advisory');
+  assert.match(r.data.nextStep, /ship: stage/);
+  assert.doesNotMatch(r.data.nextStep, /BLOCKING/);
+});
+
 test('trace-build: preserves the repo subset declared via trace-repos', () => {
   const dir = tmpProject();
   initProject(dir);
