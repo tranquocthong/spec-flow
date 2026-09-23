@@ -555,6 +555,91 @@ test('versionSyncStatus: a non-string version is treated as absent, not compared
 });
 
 // ---------------------------------------------------------------------------
+// pluginSourceDrift — a directory-sourced plugin runs from a version-keyed CACHE
+// copy, not from the source repo. Between releases the version does not move, so
+// the cache never refreshes and every edit to the source is silently inert: a new
+// engine command answers UNKNOWN_COMMAND and an edited command doc is just the old
+// one. Verified by hand on this machine: the cache sat at commit 613b14b with no
+// lib/review.cjs while the repo had it, and nothing in doctor said so.
+// ---------------------------------------------------------------------------
+
+const CACHE = '/home/u/.claude/plugins/cache/mp/sf/0.11.1';
+const SRC = '/home/u/git/spec-flow';
+const installedAt = (installPath) => ({ plugins: { 'sf@mp': [{ installPath }] } });
+const dirMarket = (p) => ({ mp: { source: { source: 'directory', path: p } } });
+/** compare() stub — the I/O half is injected, so these tests touch no disk. */
+const cmp = (differing, compared = 100) => () => ({ differing, compared });
+/** compare() stub for a source directory that has been moved or deleted. */
+const cmpMissing = () => () => ({ differing: [], compared: 0, missingSource: true });
+
+test('pluginSourceDrift: a clean cache copy is ok', () => {
+  const r = core.pluginSourceDrift(CACHE, installedAt(CACHE), dirMarket(SRC), cmp([]));
+  assert.equal(r.status, 'ok');
+  assert.match(r.detail, /matches its source directory/);
+  assert.equal(r.fix, null);
+});
+
+test('pluginSourceDrift: a stale cache warns, names the files, and hands over the sync command', () => {
+  const r = core.pluginSourceDrift(CACHE, installedAt(CACHE), dirMarket(SRC), cmp(['lib/review.cjs', 'commands/phase.md'], 105));
+  assert.equal(r.status, 'warn');
+  assert.match(r.detail, /2\/105 file\(s\) differ/);
+  assert.match(r.detail, /lib\/review\.cjs/);
+  // The detail must explain WHY, or the reader re-runs /plugin update and it does nothing.
+  assert.match(r.detail, /keyed by version/);
+  assert.match(r.fix, /^rsync -a --delete/);
+  assert.ok(r.fix.includes(SRC) && r.fix.includes(CACHE), 'the fix is copy-pasteable, not a template');
+});
+
+test('pluginSourceDrift: more than five differing files are summarised, not dumped', () => {
+  const many = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((x) => `lib/${x}.cjs`);
+  const r = core.pluginSourceDrift(CACHE, installedAt(CACHE), dirMarket(SRC), cmp(many));
+  assert.match(r.detail, /\+2 more/);
+});
+
+test('pluginSourceDrift: running from the source checkout is not drift', () => {
+  // PLUGIN_ROOT is the repo itself (a contributor running the engine directly).
+  // No installPath matches, so there is no cache to be stale.
+  const r = core.pluginSourceDrift(SRC, installedAt(CACHE), dirMarket(SRC), cmp(['x']));
+  assert.equal(r.status, 'ok');
+  assert.match(r.detail, /source checkout/);
+});
+
+test('pluginSourceDrift: a github-sourced install is not applicable', () => {
+  // The overwhelming majority of users. The check must stay silent for them.
+  const github = { mp: { source: { source: 'github', repo: 'o/r' } } };
+  const r = core.pluginSourceDrift(CACHE, installedAt(CACHE), github, cmp(['x']));
+  assert.equal(r.status, 'ok');
+  assert.match(r.detail, /not a local directory source/);
+});
+
+test('pluginSourceDrift: a directory source that IS the running root is not drift', () => {
+  const r = core.pluginSourceDrift(SRC, installedAt(SRC), dirMarket(SRC), cmp(['x']));
+  assert.equal(r.status, 'ok');
+  assert.match(r.detail, /runs directly from its source directory/);
+});
+
+test('pluginSourceDrift: a vanished source directory warns without claiming drift', () => {
+  const gone = '/nope/does/not/exist';
+  const r = core.pluginSourceDrift(CACHE, installedAt(CACHE), dirMarket(gone), cmpMissing());
+  assert.equal(r.status, 'warn');
+  assert.match(r.detail, /no longer exists/);
+  assert.doesNotMatch(r.detail, /stale/);
+});
+
+test('pluginSourceDrift: missing install metadata is ok, not a false alarm', () => {
+  assert.equal(core.pluginSourceDrift(CACHE, null, dirMarket(SRC), cmp(['x'])).status, 'ok');
+  assert.equal(core.pluginSourceDrift(CACHE, installedAt(CACHE), null, cmp(['x'])).status, 'ok');
+});
+
+test('pluginSourceDrift: the installPath match is exact, not a substring', () => {
+  // ".../sf/0.11.1" must not match ".../sf/0.11.10" — a real risk once a plugin
+  // reaches a two-digit patch, and it would compare the wrong tree.
+  const r = core.pluginSourceDrift(CACHE + '0', installedAt(CACHE), dirMarket(SRC), cmp(['x']));
+  assert.equal(r.status, 'ok');
+  assert.match(r.detail, /source checkout/);
+});
+
+// ---------------------------------------------------------------------------
 // Per-repo build tool (mixed-toolchain hubs)
 // ---------------------------------------------------------------------------
 

@@ -1,7 +1,7 @@
 {
   "name": "sf",
-  "version": "0.11.1",
-  "description": "Spec-driven dev for Claude Code: a messy SRS (or just an idea) -> a reviewed Solution Design -> adaptive implementation that traces back to every line. Change-driven resync/change/bug loops, local-first manual-test verification, keyless via Task Master. No lock-in.",
+  "version": "0.12.0",
+  "description": "Approve one design doc; the agent builds it, tests it for real and opens the PR. Lightweight spec-driven development for Claude Code and Codex.",
   "author": {
     "name": "Travis Tran",
     "url": "https://github.com/tranquocthong"
@@ -9,6 +9,9 @@
   "license": "MIT",
   "keywords": [
     "spec-driven",
+    "lightweight",
+    "fast",
+    "gsd-alternative",
     "srs",
     "solution-design",
     "workflow",
@@ -16,6 +19,10 @@
     "manual-test",
     "traceability",
     "commit",
-    "git-workflow"
+    "git-workflow",
+    "code-review",
+    "requirements-traceability",
+    "claude-code",
+    "codex"
   ]
 }

@@ -123,12 +123,19 @@ def _do_http(sb, ctx, dry_run):
     # `capture:` is documented and templated as nested INSIDE the `http:` block
     # (sibling of method/path/token/body — see templates/CHECKLIST.yaml and this
     # module's own docstring), not as a sibling of `http:` at the step level (that
-    # convention is `exec`'s, whose payload is a bare string with nowhere else to
-    # put it). Reading `sb.get("capture")` here always missed it — silently: no
-    # exception, just an empty dict, so every http-setup capture ever set its var
-    # to "" via the fallback below instead of raising a clear error. `h` IS
-    # `sb["http"]`, so `h.get("capture")` is where the value actually lives.
-    for var, expr in (h.get("capture") or {}).items():
+    # convention is `sql`'s and `exec`'s, whose payloads are bare strings with
+    # nowhere else to put it). `h` IS `sb["http"]`, so `h.get("capture")` is the
+    # canonical place.
+    #
+    # BOTH forms are accepted, and the sibling one is not a typo to be punished.
+    # Reading only `sb.get("capture")` used to be the bug here — but narrowing to
+    # only `h.get("capture")` swung it the other way and silently zeroed every
+    # capture in checklists written against the old reading: one dogfood project
+    # had 33 of them across 7 features, and one feature went from a real 21/21 to 3/22
+    # without a line of its own changing. A capture resolving to "" fails several
+    # steps later as a 400 or a blank curl argument, which reads like an app bug.
+    # Nested wins when a step somehow carries both.
+    for var, expr in (h.get("capture") or sb.get("capture") or {}).items():
         vals = jsonpath.resolve(vs.expand(expr), jbody) if jbody is not None else []
         vs.set(var, vals[0] if vals else "")
 

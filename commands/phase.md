@@ -158,14 +158,77 @@ Deterministic per-FR complexity (1–10) — this is the **only** complexity sig
    node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs state-update --feature <feature> --note "phase complete — regression passed"
    ```
 
+3b. **Code review — OPTIONAL gate (`config.phase.codeReview`, default `ask`)**
+
+   The executors that wrote this code cannot review it: they are inside their own reasoning. This step buys one **independent** pass over the finished diff, in a context that never wrote a line of it, right before the code leaves the branch.
+
+   **First, the same precondition as the ship itself:** `VERIFICATION.md` must read `status: passed` (or `verified-adhoc`). `failed`, `incomplete`, or missing → **skip the review entirely** and go to step 4, which halts. Reviewing code that step 4 is about to send back spends a pass on a diff that will change.
+
+   ```
+   node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs review-scope --feature <feature>
+   ```
+   Returns `gate` · `model` · `range` (`<base>...HEAD`) · `files` (from `file-links.json`) · `repos` · `existing` · `stale`. Act on `gate`:
+   - **`off`** → skip to step 4. Say nothing.
+   - **`ask`** (default) → **ask the user yes/no, right now**: *"Run an independent code review before shipping `<feature>`? (~N files / `<range>`)"*. No → skip to step 4, and record nothing (an un-run review is not a clean one). Yes → run it.
+   - **`always`** → run it, no prompt.
+   - `existing` non-null and `stale: false` → that review already covers this exact HEAD. Re-use it; don't burn a second pass. `stale: true` → HEAD moved since; re-review.
+
+   **Run it — one sub-agent, independent, read-only.** Spawn ONE agent with the `code-review` skill. **Model:** `review-scope → model` (default `sonnet`); non-null → pass as the Agent `model` param, else omit.
+
+   > **The failure mode of this gate is a noisy reviewer, not a lazy one.** A model handed a bare diff cannot tell a real defect from a deliberate decision, so it reports both at the same severity, and after two such reviews the user answers "no" forever and the gate is dead. Everything below exists to prevent that. Do not shorten it.
+
+   **Give it the context pack** — `review-scope → contextPack` returns only the paths that exist. Pass every one, and say what each is for:
+   - `sd` — §5.1 FR rows, §12.2 error codes, and the architecture/decision sections. **This is the specification.** Code that matches the SD is correct even when it looks surprising.
+   - `context` — why the feature exists, and the constraints it was built under.
+   - `checklist` — the behaviours that already have a manual test.
+   - `verification` — what ran green, and the `## Not verified live` gaps that are already **known and accepted**. Re-reporting a declared gap is noise.
+   - `projectAuthor` — the team's own conventions. House style is not a finding.
+   - `trace` — the FR→TC links, for checking a claim against its coverage.
+
+   **Give it the scope:** `range` when non-null, else the `files` list (multi-repo: always `files`, plus the `repos` roots — the hub repo holds no code). Tell it the diff may contain files outside this SD; **review only what this feature's FRs own**.
+
+   **Give it the standing rules:**
+   - **Read-only. Report, do not fix.** No edits, no staging, no commits. Fixing is a separate decision the user makes below.
+   - **`verify-code` and the full regression already passed.** Do not report "this needs a test" for behaviour the checklist covers, and do not re-derive what the test suite proved.
+   - **Before writing any `critical` or `high`, check it against the SD and the checklist.** Specified behaviour → not a finding. Covered by a TC → at most `low`. Only reachable through an input the FR forbids → at most `medium`.
+   - **A `critical`/`high` must name a concrete failure:** the inputs or state that trigger it, and the wrong result that follows. **If you cannot write that sentence, it is not critical or high.** This single rule is what keeps the severity ladder meaningful — a vague worry cannot be phrased as a failure scenario.
+   - **Taste is `low`.** Naming, structure, and "I would have written it differently" never exceed `low`, whatever their volume.
+   - **Empty `findings` is a valid, expected, and common answer.** An invented finding costs the user more than a missed one, because it spends the credibility the next real finding needs.
+
+   **Output contract:**
+   ```json
+   {"findings":[{"severity":"critical|high|medium|low|info","title":"...","file":"path","line":12,"category":"correctness|security|spec-mismatch|simplification|efficiency","detail":"concrete failure: inputs/state -> wrong result","suggestion":"...","checkedAgainst":"FR-007 / TC-014 / none"}]}
+   ```
+   `checkedAgainst` is required on every `critical`/`high`: the FR or TC the finding was tested against, or `none` when the behaviour is unspecified. **A blocking finding with no `checkedAgainst` was not checked** — send it back rather than collecting it.
+
+   **Record the verdict — ALWAYS, the moment the agent returns.** A review that lives only in this transcript is gone next session:
+   ```
+   node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs review-collect \
+     --feature <feature> --findings <path-to-findings.json> [--target "<range-or-scope>"]
+   ```
+   Writes `specs/<feature>/CODE-REVIEW.md` and returns `status`:
+   - **`clean`** / **`advisory`** → report the counts in one line, go to step 4. Advisory findings ship; they are written down, not acted on here.
+   - **`uncheckedBlocking` non-empty** → those blocking findings carry no `checkedAgainst`, i.e. nobody tested them against the spec. **Send them back to the reviewer once** with the SD and checklist, and ask it to re-rate each against a named FR/TC. Re-collect the result. Do not halt a ship on an unchecked claim, and do not silently downgrade one either.
+   - **`blocking`** (≥1 `critical`/`high`) → **HALT the ship.** Show each blocking finding, then ask the user to choose:
+     1. **Fix now** → re-open the owning task(s) (`task-set-status --status in-progress`), re-spawn the executor, then **re-run 1a + 1b + 2** (a post-review fix is unverified code) and come back to 3b.
+     2. **Ship anyway** → record the decision on disk before shipping, or the next session reads an unresolved blocker:
+        ```
+        node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs review-accept --feature <feature> --note "<why>"
+        ```
+     3. **Abort** → stop; `/sf:status` keeps surfacing the blocking review.
+
+   This gate never invents a reason to skip itself: `gate: ask` + user says no is the only silent path, and `verify-code` / regression remain the hard gates either way.
+
 4. **Ship** — **HARD GUARD (G3): do NOT ship unless `VERIFICATION.md` reads `status: passed`** (or `verified-adhoc` for an out-of-loop live verify). `failed` or missing → STOP, go back to the regression sweep. Once passed: stage, then invoke the bundled **commit** skill in `push` mode (`skills/commit`) — it writes the conventional-commit message, commits on the current `feat/<feature>` branch (it refuses to commit on the base branch when `branching.mode != off`), pushes, and surfaces the MR/PR link. Report the link.
    - **Tag the ship (G2):** `git tag -a <feature>-v<n> -m "<feature> shipped"` then `git push --tags` — a durable, greppable record that this SD reached a verified ship. Skip only if `branching.mode: off`.
    - **Multi-repo:** run the commit skill once per repo with staged changes (`cd` into each) → one PR per service; tag each. Report all links together.
+   - **Code review (soft guard):** if step 3b ran and left `status: blocking` with `accepted: no`, you did not finish 3b — go back. `clean`/`advisory`/`accepted: yes`/skipped all ship. Mention `CODE-REVIEW.md` in the report when it exists.
 
 ## Pipeline recap
 ```
 parse-prd (3-phase) → route --sd → wave-plan → [task-next | parallel batch]
   → hybrid-executor (TDD RED) → task-set-status(review) + trace-link + trace-build
   → verify-code --task <id> → run-checklist smoke (deferrable) → task-set-status(done) → state-update
-  → verify-code (full suite, once) → run-checklist regression → verify-collect → VERIFICATION.md → ship
+  → verify-code (full suite, once) → run-checklist regression → verify-collect → VERIFICATION.md
+  → [optional gate] review-scope → code-review sub-agent → review-collect → CODE-REVIEW.md → ship
 ```
