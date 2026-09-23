@@ -2,6 +2,25 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [0.12.0] — 2026-09-22
+
+### Added
+
+- **An optional code-review gate in the ship step.** The agents that wrote a feature cannot review it — they are inside their own reasoning. `/sf:phase` close-out now offers one independent pass over the finished diff, in a context that never wrote a line of it, immediately before the commit.
+  - `config.phase.codeReview` decides whether it runs. Three states, because the default is a question rather than a behaviour: `ask` (default — `/sf:phase` asks yes/no once per ship), `always` (no prompt), `off` (skip entirely). `init-project` back-fills the key into existing configs without changing behaviour, since absent already read as `ask`.
+  - `review-scope` computes the scope deterministically: the base branch, `<base>...HEAD` (null when branching is off, when you are on base, or when the base ref will not resolve — never a bogus range), the files the executors actually wrote from `file-links.json`, and the repo roots on a multi-repo feature, where those files are the only reliable scope. It also reports a prior verdict and whether HEAD has moved past it, so an unchanged tip re-uses its review instead of paying for a second pass.
+  - The reviewer is a sub-agent, read-only, pinned by `config.models.codeReviewer` (default `sonnet`). It reports — it never fixes. Fixing is a decision the user makes afterwards, and a post-review fix re-enters the verification gates.
+  - **The gate is built against its real failure mode, which is a noisy reviewer rather than a lazy one.** A model handed a bare diff cannot tell a defect from a deliberate decision, so it reports both at the same severity, and after two such reviews the user declines forever and the gate is dead. So `review-scope` also returns a `contextPack` — the SD, `CONTEXT.md`, the checklist, `VERIFICATION.md` (including gaps already known and accepted), `project-author.md` and the trace — and the step's standing rules make the reviewer check every critical/high against the spec before writing it, cap taste at `low`, and name the inputs and wrong result that a blocking finding produces. A `critical`/`high` must carry `checkedAgainst` (the FR or TC it was tested against); `review-collect` returns any that do not as `uncheckedBlocking`, and `/sf:phase` sends those back for a re-rate instead of halting a ship on an unchecked claim.
+  - `review-collect` turns the findings into `specs/<feature>/CODE-REVIEW.md` and a deterministic verdict: `clean`, `advisory`, or `blocking` on any critical/high. Blocking halts the ship and hands the user three choices — fix now, ship anyway, or abort.
+  - `review-accept --note` records a human's "ship anyway" on disk. Without it the override would live only in a transcript, and the next session would read an unresolved blocker. `/sf:status` surfaces an unaccepted blocking verdict in its next step.
+  - Codex: the `code-review` skill is a Claude Code built-in and is not part of the package. The Codex runtime contract tells the host to perform the review itself against the same output contract when it has no equivalent, and keeps the gate's shape either way — a review that was performed but never collected did not happen.
+
+- **`/sf:doctor` now catches a stale local plugin install (`plugin-source-sync`).** A plugin installed from a *local directory* marketplace does not run from the source repo: Claude Code copies it into `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/` and runs that. The cache path is keyed by version, so while the version string holds still — exactly what a careful maintainer does between releases — edits to the source never reach the running plugin. The failure is silent and total: a new engine command answers `UNKNOWN_COMMAND`, an edited command doc is simply the old one. Nothing in doctor said so, and finding it by hand costs a session. The check compares the runtime surface (`bin`, `lib`, `commands`, `agents`, `skills`, `templates`, `hooks`) by content hash, names the differing files, explains why `/plugin update` will not fix it, and hands over a copy-pasteable `rsync`. It is silent for a normal github install, and for a contributor running the engine straight from a checkout.
+
+### Notes
+
+- The gate is optional; the hard gates are unchanged. `verify-code`, the regression sweep, and `VERIFICATION.md: status: passed` still guard the ship on their own, and declining the review is a silent, recorded-nowhere no-op rather than a clean verdict.
+
 ## [0.11.1] — 2026-09-15
 
 ### Added

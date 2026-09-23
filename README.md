@@ -1,375 +1,153 @@
 # spec-flow
 
-**Spec-driven development for Claude Code and Codex.** Feed it a messy SRS, or just an idea, and it produces a reviewed Solution Design (SD), then implements each requirement with a trace from the SRS line to the source file, gated by local manual tests before anything is marked done.
-
-Spec-driven, but adaptive: small work skips the ceremony, big work gets the rigor. No API key, no server, no database. Everything it writes is plain markdown and JSON committed next to your code.
+**Approve one design. The agent builds it, tests it for real, and opens the PR.**
 
 [![release](https://img.shields.io/github/v/release/tranquocthong/spec-flow)](https://github.com/tranquocthong/spec-flow/releases)
 [![license](https://img.shields.io/github/license/tranquocthong/spec-flow)](LICENSE)
 [![codex release](https://github.com/tranquocthong/spec-flow/actions/workflows/codex-release.yml/badge.svg)](https://github.com/tranquocthong/spec-flow/actions/workflows/codex-release.yml)
 
-```
-SRS / idea  ->  SD (you approve)  ->  adaptive implement  ->  manual-test  ->  ship
-  |                 ^                                                          |
-  |                 +-------- /sf:resync   Product changed the SRS ------------+
-  +--------------------------- /sf:change   you changed your mind -------------+
-                               /sf:bug      something is broken (SD optional)
-```
-
-## Table of contents
-
-- [Why](#why)
-- [Install](#install)
-- [Five-minute tour](#five-minute-tour)
-- [Which command do I run?](#which-command-do-i-run)
-- [The flows](#the-flows)
-- [Gates that never move](#gates-that-never-move)
-- [What lands in your repo](#what-lands-in-your-repo)
-- [Configuration](#configuration)
-- [Codex](#codex)
-- [Engine reference](#engine-reference)
-- [Repository layout](#repository-layout)
-- [Status, tests and contributing](#status-tests-and-contributing)
-
-## Why
-
-An SRS is uncontrolled input. Product writes it in a different shape every time, in prose, tables, bullets, English or Vietnamese. Code generated straight from it inherits every ambiguity.
-
-spec-flow puts one control point between the two: the **Solution Design**. Deterministic code only harvests raw material from the SRS. An AI agent (`sd-author`) shapes that harvest into atomic functional requirements, test cases, error codes and state tables, following a template you own. A human approves the SD. Everything downstream is deterministic and traces back to it.
-
-What that buys you:
-
-- **One approval, then the agent drives.** After the SD gate you do not type the steps. Tasks are seeded, routed by complexity, implemented, tested and closed.
-- **Real traceability.** SRS section to SD section to FR/TC to task to source file, stored per feature in `trace.json`. Change one thing and see everything it touches.
-- **Change loops, not regeneration.** Product edits the SRS: `resync` diffs against the frozen snapshot and touches only the impacted nodes. You change your mind: `change` edits the SD first, then re-opens exactly the tasks that implemented it. A bug: `bug` reproduces first, then triages to code, spec or SRS.
-- **Nothing reaches `done` unverified.** A bundled manual-test harness (HTTP, Kafka, SQL, Redis, shell) runs a `CHECKLIST.yaml` per feature. A test that asserts nothing is reported as not verified, never as passed.
-- **Keyless and offline.** The task engine is a bundled, zero-dependency Node CLI. AI steps run inside your active Claude Code or Codex session. No MCP server, no package fetch, no key.
-- **Brownfield safe.** It never fakes an SD for code that predates it. Legacy bugs get tracked fixes with a repro test as the contract.
-
-## Install
-
-### Claude Code
+Lightweight spec-driven development for Claude Code and Codex. You read and approve one
+document per feature. Tasks, code, tests, commit and PR follow from it, and nothing is called
+done until a real test ran and checked something.
 
 ```
 /plugin marketplace add tranquocthong/spec-flow
 /plugin install sf@claude-spec-flow
 ```
 
-Reload Claude Code and run `/sf:doctor`.
+## Why it exists
 
-Prerequisites: Node 18 or newer. Python 3 with PyYAML (`pip3 install pyyaml`) for the manual-test checklist runner.
+Spec-driven workflows are a good idea that usually costs too much. A small feature becomes a
+roadmap entry, a discussion, a research note, a plan, a summary and a verification report: an
+hour of documents before the first line of code, and sometimes more markdown than code.
 
-<details><summary>Private marketplace and zero-install engine</summary>
+spec-flow keeps the one part of a spec that pays for itself, a design a human signs off, and
+drops the rest. The rule it is built on: **the process scales with the work.**
 
-```
-# Team install from your own git host
-/plugin marketplace add git@<your-git-host>:<org>/spec-flow.git
-/plugin install sf
+| The work | What spec-flow asks of you |
+| --- | --- |
+| A bug | A description. It writes a failing test first, then fixes. No design document. |
+| A small change to a shipped feature | One edited row in the design. |
+| A feature | One design document to read and approve. |
+| An epic (more than 25 requirements) | Approve a split into sub-features, each with its own design. |
 
-# The engine is plain Node and runs without the plugin
-node <path>/spec-flow/bin/flow-tools.cjs doctor
-node <path>/spec-flow/bin/flow-tools.cjs sd-skeleton --srs <your-srs.md> --feature demo
-```
-
-`ANTHROPIC_API_KEY` and similar keys are only needed if you enable the headless fallback for CI (see [Configuration](#configuration)).
-</details>
-
-### Codex
-
-Codex gets a generated plugin built from the same sources. Build it locally or download `spec-flow-codex.tar.gz` from a [release](https://github.com/tranquocthong/spec-flow/releases). See [Codex](#codex) below and [docs/codex.md](docs/codex.md).
-
-## Five-minute tour
+## What it looks like
 
 ```
-# 1. Once per project, at the repo root. Stack is auto-detected from build markers.
-/sf:init                            # or: /sf:init --stack java-spring --language vi
-
-# 2. Per feature: SRS in, SD draft out. Bare /sf:ingest interviews you and writes the SRS.
-/sf:ingest docs/srs/payment-refund.md
-#    -> .spec-flow/specs/payment-refund/SD.md, trace.json, snapshot, STATE.md
-#    -> you clear the TODO:MANUAL-REVIEW markers and approve the SD. This is your control point.
-
-# 3. From here the agent drives.
-/sf:checklist payment-refund        # SD section 13.2 -> CHECKLIST.yaml, agent fills request + assertion
-/sf:phase payment-refund            # seed tasks, route each FR fast/expand/deep, implement, smoke-test, close
-#    -> regression run writes VERIFICATION.md; ship commits, pushes and surfaces the PR/MR link
+/sf:init                          # once per repo
+/sf:ingest docs/srs/refund.md     # requirements in, one design out (bare /sf:ingest interviews you instead)
+                                  #   -> read .spec-flow/specs/refund/SD.md and approve it
+/sf:checklist refund              # the design's test cases become runnable tests
+/sf:phase refund                  # tasks -> code -> tests -> commit -> PR link
 ```
 
-Coming back later, in any session: `/sf:status` reads the disk and prints the exact next command.
+Back later, in any session: `/sf:status` reads the disk and prints the exact next command.
+
+## What it is good at
+
+**You approve once, then it drives.** After the design is approved you do not type the steps.
+Each requirement is scored 1 to 10: small ones go straight to code, bigger ones are broken into
+subtasks, the hardest are researched first. It pauses to show you the task list, when a test
+fails, and to ask whether you want an independent review of the diff before it ships.
+
+**"Done" means a test ran.** Each feature gets a `CHECKLIST.yaml` that the bundled runner
+executes against your running service: HTTP calls, Kafka events, SQL and Redis checks on the
+side effects. HTTP 200 alone is not a pass, and a test that asserted nothing is reported as
+not verified, never as passed. A feature ships only when its regression run is green.
+
+**Changes touch only what changed.** Every requirement is linked to its tests, its tasks and
+the source files that implemented it. Change one requirement and exactly the tasks that built
+it reopen. When product sends a new version of the requirements, spec-flow diffs it against a
+frozen copy and updates only the affected parts.
+
+**Bugs start with a failing test.** `/sf:bug` writes a reproduction test and confirms it fails
+before any fix is attempted. After the fix it stays in the suite for good. It works on legacy
+code that never had a design.
+
+**It picks up where you left off.** The state lives on disk, not in the chat. Context runs out,
+a new session, another machine, Claude Code to Codex and back: `/sf:status` knows the next step.
+
+**Messy input is fine.** Requirements in prose, tables or bullets, in English or Vietnamese. An
+agent turns them into atomic requirements, test cases and error codes, and marks only the
+genuinely ambiguous spots for you to resolve. No task is created while one is left open.
+
+**Nothing to run or pay for.** 12 commands, 2 agents and a zero-dependency Node CLI. No API key,
+no server, no MCP, no network. Everything it writes is markdown and JSON, committed next to
+your code.
+
+## Is it for you?
+
+**A good fit when:**
+
+- You build backend services and APIs. The test runner speaks HTTP, Kafka, SQL, Redis and shell.
+- Requirements come from someone else (a BA, a product owner, a client), and someone will ask
+  later whether requirement 14 was built and how you know.
+- One feature spans several service repos. One design drives the code in each, one PR per repo.
+- The codebase already exists. You adopt spec-flow from today forward; it never invents a
+  design for old code.
+
+**Not the right tool when:**
+
+- You are prototyping or exploring. Just prompt the agent.
+- The feature is mostly UI and "tested" means looking at the screen. The runner checks behaviour
+  through APIs, events and data, not pixels.
+- You want long-horizon planning with a roadmap and milestones. GSD and BMAD-METHOD do that well.
 
 ## Which command do I run?
 
 | You have or want | Run |
 | --- | --- |
 | First time in this repo | `/sf:init` |
-| A new feature from an SRS file | `/sf:ingest <srs.md>` |
-| Just an idea, no file | `/sf:ingest` with no argument. It interviews you and writes the SRS |
-| Product changed the SRS | `/sf:resync <srs_v2.md>` |
-| You want to change or enhance an implemented feature | `/sf:change "<description>"` |
-| A bug, including on legacy code with no SD | `/sf:bug "<description>"` |
-| An SRS too big for one SD (more than 25 FRs) | `/sf:split <srs.md>` |
-| A refactor or cleanup | The normal pipeline, sized adaptively. `/sf:ingest` if substantial, just do it if trivial |
-| Checklist is filled, run the tests | `/sf:manual-test <feature>` |
+| A new feature from a requirements file | `/sf:ingest <srs.md>` |
+| Just an idea, no file | `/sf:ingest`. It interviews you and writes the requirements |
+| Product changed the requirements | `/sf:resync <srs_v2.md>` |
+| Change or extend a shipped feature | `/sf:change "<description>"` |
+| A bug, including in legacy code | `/sf:bug "<description>"` |
+| A feature too big for one design | `/sf:split <srs.md>` |
+| Run the tests | `/sf:manual-test <feature>` |
 | Context is running out mid-task | `/sf:checkpoint`, then `/sf:status` next session |
-| Where am I? Is the install healthy? | `/sf:status` and `/sf:doctor` |
+| Where am I? Is the install healthy? | `/sf:status`, `/sf:doctor` |
 
-Resuming open work: `/sf:status` lists open bugs and changes with ids. Continue one with `/sf:bug --resume <id>` or `/sf:change --resume <id>`. Re-running `/sf:ingest` on an interrupted ingest is safe. It skips completed steps and never overwrites an authored SD.
+## How it compares
 
-## The flows
+[GSD](https://github.com/open-gsd/gsd-core), [spec-kit](https://github.com/github/spec-kit) and
+[BMAD-METHOD](https://github.com/bmad-code-org/BMAD-METHOD) are strong at turning your own idea
+into a plan. spec-flow is for the other case: the spec came from someone else, you want the
+feature shipped today, and you will have to show later what happened to each requirement.
 
-### Flow 1. New feature from an SRS or an idea
+| | GSD | spec-kit | BMAD-METHOD | spec-flow |
+| --- | --- | --- | --- | --- |
+| Documents per unit of work | one per step: context, research, plan, summary, UAT, verification | spec, plan and tasks per feature | documents across several planning roles | one design per feature; bugs need none |
+| Requirements change after build | add or re-plan phases | refine the artifacts and re-run | re-enter the planning loop | diff against a snapshot; only affected tasks reopen |
+| When is it done | verification and UAT documents | convergence loop | verify phase | a test ran and asserted; empty tests count as not verified |
+| Requirement to code | requirements mapped to phases | not a stated goal | not a stated goal | each requirement linked to its tests, tasks and files |
 
-No SRS is the normal case. Run `/sf:ingest` bare and it asks about the actor, the behaviors, the rules and error cases, and the acceptance criteria, then writes `.spec-flow/srs/<feature>.md` for you. Prefer to write it yourself? A rough markdown file is fine. Behaviors become FRs, rules and errors become TCs and error codes, acceptance criteria become TCs. Spend your effort on behaviors and error cases. That is the part the AI cannot invent.
+Written from each project's public documentation in September 2026. If something is wrong,
+open an issue and it gets fixed.
 
-```
-/sf:ingest <srs.md>
-   srs-snapshot        frozen baseline for future diffs
-   sd-skeleton         deterministic harvest into the SD template (dirty by design)
-   sd-author (AI)      cleans the harvest into atomic FR/TC, fills architecture, API, state
-   trace-build         FR <-> TC <-> error <-> state links in trace.json
-   state-update        STATE.md with a deterministic next step
-        |
-   GATE  clear TODO:MANUAL-REVIEW markers, review, approve      <- your only control point
-        |
-/sf:checklist <feature>          SD section 13.2 -> CHECKLIST.yaml, co-located with the SD
-        |
-/sf:phase <feature>
-   parse-prd            seeds one task per FR under a per-feature tag (only after 0 TODO)
-   route --sd           scores each FR 1-10:  1-3 fast  |  4-7 expand into subtasks  |  8-10 research first
-   per task             hybrid-executor writes code -> trace-link records files -> smoke run
-                        PASS: done + state-update      FAIL: halt and surface
-        |
-   regression run       checklist-to-verification hook writes VERIFICATION.md
-        |
-   ship                 commit + push on the feature branch, PR/MR link surfaced
-```
+## Install
 
-The SRS harvest is intentionally dirty. Judge the SD after `sd-author`, not the skeleton.
-
-### Flow 1b. Epic split
-
-When `/sf:ingest` reports `epicScale: true` (more than 25 FRs or 800 generated lines), run `/sf:split <srs.md>`. `sd-author` proposes two to five sub-features grouped by user-story range or bounded context. You approve or adjust the grouping. It is never auto-committed, because it is a design decision. Each sub-feature then gets its own SD, linked through the trace, and runs the normal pipeline independently. A later `/sf:resync` scopes impact to the affected sub-features only.
-
-### Flow 2. Product changed the SRS (top-down)
+**Claude Code**
 
 ```
-/sf:resync <srs_v2.md>
-   srs-diff        changeset against the last snapshot (anchored ids and tables, prose fallback)
-   trace-impact    exact FR / TC / error / task ids touched
-   sd-author       updates only the impacted SD sections
-   GATE            review the delta, approve
-   cascade         re-open impacted done tasks, regenerate impacted checklist rows
-   srs-snapshot    new baseline, trace-build, state-update
-/sf:phase <feature>   re-implement the re-opened tasks, re-test, close
+/plugin marketplace add tranquocthong/spec-flow
+/plugin install sf@claude-spec-flow
 ```
 
-This defends against "fix one place, forget three". Every touched task must pass manual-test again.
+Reload Claude Code and run `/sf:doctor`. Needs Node 18 or newer, and Python 3 with PyYAML
+(`pip3 install pyyaml`) for the test runner.
 
-### Flow 3. You want to change the spec after implementation (bottom-up)
+**Codex** gets a plugin generated from the same sources. Download `spec-flow-codex.tar.gz` from
+a [release](https://github.com/tranquocthong/spec-flow/releases) and see [docs/codex.md](docs/codex.md).
+A feature started in one tool continues in the other from the same files.
 
-```
-/sf:change "<description>" --type fix|enhance
-   1. open .spec-flow/changes/<NNN>-change-<slug>.md          audit trail
-   2. edit the SD section first, never patch code blind
-   3. trace-impact -> impacted tasks, re-open them
-   4. /sf:phase -> executor edits code -> smoke run
-   5. satisfied: change done, VERIFICATION.md updated. Not satisfied: back to 2
-```
+## Learn more
 
-Fast path: when the impact is one FR/TC and one task, the change record is one line, you edit the SD row directly, and only that TC is verified. Full regression runs at close. `/sf:change` requires an existing SD. If there is no SD, or the code simply misbehaves against a correct SD, it is a bug.
+- [docs/guide.md](docs/guide.md): every flow step by step, the gates, the files it writes,
+  configuration and the engine commands.
+- [docs/codex.md](docs/codex.md): running under Codex.
+- [CHANGELOG.md](CHANGELOG.md): every release, including the bugs it found and how they were
+  verified.
 
-### Flow 4. Bug
-
-A bug is not always a spec change. Triage decides the route:
-
-| Kind | Criteria | Route |
-| --- | --- | --- |
-| Code bug | SD is right, code is wrong | Fix code only. Never edit the SD. Repro test stays as regression coverage |
-| Spec bug | SD is wrong or incomplete | Hand off to `/sf:change --type fix` |
-| SRS-level | Requirement misunderstanding | Hand off to `/sf:resync` |
-
-**Repro first.** A failing `CHECKLIST.yaml` entry is written and confirmed red before any code changes. After the fix it turns green and stays.
-
-**SD optional.** On a project or feature with no SD, `/sf:bug` skips triage and treats it as a code bug. The repro test plus expected/actual is the contract.
-
-### Refactor and brownfield
-
-A refactor is ordinary work. A substantial one gets an SRS whose requirements are the behaviors that must stay identical, and the checklist becomes the characterization suite. Capture those tests from the running system, not from prose you might misremember. A trivial one is just done.
-
-For code written before you adopted spec-flow, do not retro-generate an SD. The SRS says as-specified, the code says as-built, and an SD that matches neither is worse than none because the whole model trusts it. Fix legacy bugs with `/sf:bug`. Spec only the delta for legacy changes with a focused `/sf:ingest`. Adopt forward, not backward.
-
-## Gates that never move
-
-1. **`/sf:ingest` never implements.** It stops at the SD review gate. Discussing a feature is not permission to build it.
-2. **No task seeding while the SD has a `TODO:MANUAL-REVIEW` marker.** Layer 2 is `drift-check` (error codes in code versus SD section 12.2) and the `sd-drift-detect` hook (file edits outside the trace). Both advisory.
-3. **`CHECKLIST.yaml` exists before the first task is implemented.**
-4. **`verify-code` runs before every smoke run.** Tests, coverage threshold, forbidden patterns, secret scan, driven by config. Unconfigured means skipped, not blocked.
-5. **`review` becomes `done` only after smoke passes.** A feature ships only when regression passes and `VERIFICATION.md` reads `status: passed`. A test that executed nothing is `notVerified`, and holds the status at `incomplete`.
-6. **The SD is the source of truth.** Change the SD, then propagate. Never patch code without patching the SD.
-
-## What lands in your repo
-
-spec-flow is a two-tier overlay. The plugin is the engine and never changes per project. The project's `.spec-flow/` directory is the living profile, committed by default so the spec history travels with the code.
-
-```
-.spec-flow/
-  config.json                 stack, conventions, branching, models, verify, language
-  project-author.md           SD-authoring rules that accumulate via `learn`
-  srs/<feature>.md            the live input: a formal SRS or your idea
-  specs/<feature>/
-    SD.md                     the Solution Design, your control point
-    CHECKLIST.yaml            manual tests, permanent regression coverage
-    trace.json                durable per-feature traceability matrix
-    file-links.json           task -> file and FR -> file evidence, survives rebuilds
-    STATE.md                  per-feature state with a deterministic next step
-    checkpoint.md             mid-task checkpoint, cleared when the task is done
-    ship.json                 written at ship, retires the next step
-  snapshots/                  frozen SRS baselines, never hand-edited
-  bugs/  changes/  epics/     records for the change loops
-  trace.json  STATE.md  VERIFICATION.md    mirrors of the active feature
-.taskmaster/                  tasks.json (one tag per feature) + state.json
-CONTEXT.md                    locked decisions, fed to every agent
-```
-
-Per-feature files are keyed by the feature directory, so two features can never clobber each other. The root mirrors are derived and regenerated on every `trace-build` or `state-update`. A merge conflict on a mirror is benign: take either side and rebuild.
-
-## Configuration
-
-Everything policy-shaped lives as data in `.spec-flow/config.json`, seeded by `/sf:init`.
-
-**Branching.** One SD is one branch. `/sf:ingest` creates `feat/<feature>`. Bugs and changes get `fix/<id>-<slug>` and `<type>/<id>-<slug>`. The bundled commit skill refuses to commit on the base branch unless `mode` is `off`. Works the same on GitHub and GitLab.
-
-```json
-"branching": {
-  "mode": "per-sd",
-  "base": "main",
-  "templates": { "sd": "feat/{feature}", "bug": "fix/{id}-{slug}", "change": "{type}/{id}-{slug}" }
-}
-```
-
-**Models.** Which model spawns each agent is config, not hardcoded. `null` inherits the session's model.
-
-```json
-"models": { "sdAuthor": null, "hybridExecutor": "sonnet" }
-```
-
-**AI mode for task generation.** Default is `agent-native`: the active Claude Code or Codex session fulfils a generation spec and the engine validates and imports the result. For CI or cron with no host agent, set `taskCore.headlessFallback` to an HTTP endpoint, model and key from the environment. Off by default, and the engine opens no HTTP client unless it is configured. Details in [docs/ai-hybrid-usage.md](docs/ai-hybrid-usage.md).
-
-**Verification gate.** `verify.testCommand`, `coverageThreshold`, `forbiddenPatterns`, `secretScan`, per repo when a feature spans several repositories (`config.repos`).
-
-**Language.** `language: "vi"` makes the agent reply and author SD prose in Vietnamese. Code, identifiers, commit messages, section headings and FR/TC ids stay English. SRS harvesting understands English and Vietnamese keyword packs.
-
-**Phase.** `phase.confirmTasks` asks before seeding tasks. `phase.taskNotes` turns on per-task AI progress notes (off by default, they cost one AI call per task).
-
-**Evolving the authoring rules.** When `sd-author` learns a reusable team convention, it is appended to `project-author.md` with a timestamp:
-
-```
-node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs learn --note "Always include audit_log in the data model" --category always
-```
-
-Commit it and the whole team inherits the rule.
-
-## Codex
-
-The Codex plugin is generated from the same sources, so there is no second copy of the workflow to maintain. Build and validate locally:
-
-```sh
-node scripts/build-codex.cjs
-node scripts/validate-codex.cjs
-codex plugin marketplace add ./dist/codex
-codex plugin add sf@spec-flow-codex
-```
-
-Then, in the target project, trust the three hooks through `/hooks` and run `$sf-status`. Every `/sf:<name>` command maps to `$sf-<name>`. Project artifacts under `.spec-flow/` and `.taskmaster/` are shared byte for byte, so a feature started in Claude Code continues in Codex from the same checkpoint, and back.
-
-The release workflow runs the Node and Python suites on Node 18 and 22, builds and validates the distribution, and attaches `spec-flow-codex.tar.gz` to each GitHub release. Full guide: [docs/codex.md](docs/codex.md).
-
-## Engine reference
-
-Two CLIs ship in `bin/`. Both are zero-network and print one JSON line per call.
-
-`bin/flow-tools.cjs` is the deterministic workflow engine, 41 subcommands. `bin/task-master` is the task engine with AI-shaped operations (`parse-prd`, `expand`, `update`, `research`) that are fulfilled by the host session.
-
-<details><summary><code>flow-tools.cjs</code> subcommands</summary>
-
-| Group | Command | Does |
-| --- | --- | --- |
-| Project | `init` | bootstrap `.spec-flow/` dirs and read config |
-| | `init-project [--name] [--stack] [--design-type]` | idempotent per-project init, auto-detects stack from `build.gradle`, `pom.xml`, `package.json`, `go.mod`, `pyproject.toml`, `*.csproj` |
-| | `learn --note --category` | append a timestamped rule to `project-author.md` |
-| | `doctor [--sd] [--feature]` | env, plugin files, version sync, install state, trace health, SD gate, task-engine binding |
-| | `status-report [--feature]` | pure-read aggregate behind `/sf:status`, with a deterministic `nextStep` |
-| SRS to SD | `srs-snapshot --srs` | freeze an SRS baseline |
-| | `sd-skeleton --srs --feature [--type]` | harvest SRS into the SD template |
-| | `srs-diff --new [--old]` | changeset between SRS versions, anchored ids plus prose fallback |
-| | `route --sd` | score each FR 1-10 into fast, expand, deep |
-| Checklist | `checklist-gen --sd --feature [--type]` | SD section 13.2 into `CHECKLIST.yaml`, HTTP stub for api/hybrid, `live-e2e` scaffold otherwise |
-| | `checklist-status --feature` | classify each test as filled, scaffold, no-verify or live-e2e |
-| Trace | `trace-build --sd [--feature] [--tasks]` | build the per-feature trace, merge `file-links.json`, write the mirror |
-| | `trace-link --task --feature --files [--fr]` | record task-to-file and FR-to-file evidence |
-| | `trace-impact --ids / --keywords / --changeset` | impacted FR, TC, error, task and file nodes |
-| | `trace-repos --feature [--set]` | declare or read the repo subset a feature targets |
-| | `drift-check --feature` | error codes in code versus SD section 12.2, `spec-not-evidenced` and `impl-not-specced` |
-| Verify | `verify-collect --results` | runner output into `VERIFICATION.md` truths, `notVerified` holds status at `incomplete` |
-| | `verify-code [--feature] [--repos]` | tests, coverage, forbidden patterns, secret scan, scoped to the repos a feature touched |
-| State | `state-update --feature [--note] [--shipped]` | refresh per-feature `STATE.md` plus the mirror |
-| | `checkpoint-write` / `checkpoint-clear` | mid-task checkpoint |
-| | `task-baseline --feature [--apply]` | mark tasks done from verification evidence only, dry-run by default |
-| | `wave-plan [--max]` | ready set of pending tasks whose dependencies are done |
-| Records | `bug-new` / `bug-list` | bug records in `.spec-flow/bugs/` |
-| | `epic-new` / `epic-list` | epic records in `.spec-flow/epics/` |
-| | `branch-ensure --kind sd\|bug\|change` | create or switch the work branch from config templates, no-op off base |
-| Tasks | `task-add`, `task-get`, `task-list`, `task-next`, `task-set-status`, `task-update` | CRUD on `.taskmaster/tasks/tasks.json` per tag |
-| | `task-use-tag`, `task-add-dep`, `task-remove-dep`, `task-add-subtask`, `task-expand` | tag switching, dependencies with cycle detection, subtasks |
-| Models | `taskmaster-model-plan`, `taskmaster-model-check` | decide whether a model change is needed for a role, and check provider keys are present |
-
-</details>
-
-<details><summary><code>task-master</code> subcommands</summary>
-
-```
-init [--yes]                              initialise .taskmaster/
-use-tag <tagName>                         switch the tag namespace
-parse-prd --input <file> [--tag]          SD into tasks (AI, agent-native)
-analyze-complexity [--tag]                complexity report (AI, not used by the loop)
-expand --id <id> [--tag]                  task into subtasks (AI)
-update --from <id> [--prompt]             cascade a changeset into tasks (AI)
-update-task --id <id> [--prompt] [--tag]  update one task
-research <query> [--tag]                  research a query (AI)
-tasks-import --tag [--file]               validate and import AI-generated task JSON
-models [flags]                            kept for compatibility, no-op
-```
-
-</details>
-
-## Repository layout
-
-```
-.claude-plugin/    plugin.json, marketplace.json
-commands/          12 slash commands: init ingest checklist manual-test phase resync change bug split checkpoint status doctor
-agents/            sd-author (SRS to clean SD), hybrid-executor (implements one task)
-skills/            srs-to-sd (intent routing), manual-test (checklist runner, Python), commit (conventional commit + push)
-hooks/             spec-flow-anchor (UserPromptSubmit), sd-drift-detect (PreToolUse), checklist-to-verification (PostToolUse)
-bin/               flow-tools.cjs, task-master
-lib/               core, trace, verify, drift, maintenance, task-core, tag/dependency/subtask managers, ai-router, two-phase
-templates/         sd-template.md, srs-template.md, lang/{en,vi}.json
-adapters/codex/    Codex adapter sources.   scripts/build-codex.cjs generates dist/codex/
-docs/              codex.md, ai-hybrid-usage.md, agent-native-two-phase.md, cutover-runbook.md
-test/              node --test test/*.test.cjs
-```
-
-## Status, tests and contributing
-
-Current release is in the badge above. Every version is a git tag on `main` and has an entry in [CHANGELOG.md](CHANGELOG.md), which records the bugs each release found and how they were verified.
-
-```sh
-node --test test/*.test.cjs                                     # 916 engine tests
-cd skills/manual-test/scripts && python3 -m unittest checklist_lib.tests.test_checklist_lib   # 80 runner tests
-node scripts/build-codex.cjs && node scripts/validate-codex.cjs # Codex distribution
-```
-
-spec-flow is in active dogfooding on real multi-repo projects. Fixes ship from live-use feedback, and the changelog is candid about what was wrong. Before a team-wide rollout, expect one or two tuning passes of the `sd-author` prompt on your own SRSs via `project-author.md`.
-
-Contributing: after cloning, run `git config core.hooksPath .githooks` once. The pre-commit hook enforces the per-file line ceiling on the engine. Dependencies are pinned and documented in [DEPENDENCIES.md](DEPENDENCIES.md).
-
-MIT. See [LICENSE](LICENSE).
+spec-flow is in active use on real multi-repo projects and covered by 961 engine tests and 82
+runner tests. Contributions are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md). MIT licensed.

@@ -405,6 +405,42 @@ class TestHttpSetupCaptureStep(unittest.TestCase):
         self.assertIsNone(err)
         self.assertEqual(ctx["varstore"].get("PLATFORM_ID"), "plat-123")
 
+    def test_sibling_capture_is_still_honoured(self):
+        """The other half of the same bug. Narrowing the read to the nested form
+        only silently zeroed every capture written against the sibling form —
+        one dogfood project had 33 across 7 features, and one feature fell from a real
+        21/21 to 3/22 without one of its own lines changing. `sql:`/`exec:` put
+        `capture:` at step level, so authors reach for it on `http:` too. Both
+        forms resolve; the failure mode of getting this wrong is an empty var
+        that blows up several steps later, looking like an app bug."""
+        from checklist_lib import setup, http
+        orig = http.do_request
+        http.do_request = lambda m, u, h, b: (201, {"id": "plat-sibling"}, "")
+        try:
+            ctx = self._ctx()
+            err = setup.run_steps(
+                [{"http": {"method": "POST", "path": "/v1/platforms"},
+                  "capture": {"PLATFORM_ID": "$.id"}}], ctx)
+        finally:
+            http.do_request = orig
+        self.assertIsNone(err)
+        self.assertEqual(ctx["varstore"].get("PLATFORM_ID"), "plat-sibling")
+
+    def test_nested_capture_wins_when_a_step_carries_both(self):
+        from checklist_lib import setup, http
+        orig = http.do_request
+        http.do_request = lambda m, u, h, b: (201, {"id": "nested", "other": "sibling"}, "")
+        try:
+            ctx = self._ctx()
+            err = setup.run_steps(
+                [{"http": {"method": "POST", "path": "/v1/platforms",
+                           "capture": {"PLATFORM_ID": "$.id"}},
+                  "capture": {"PLATFORM_ID": "$.other"}}], ctx)
+        finally:
+            http.do_request = orig
+        self.assertIsNone(err)
+        self.assertEqual(ctx["varstore"].get("PLATFORM_ID"), "nested")
+
     def test_captured_platform_id_chains_into_a_later_setup_step(self):
         """The real-world shape: step 1 captures an id, step 2's path uses it. Before
         the fix, step 2 always saw an empty PLATFORM_ID (this is exactly what

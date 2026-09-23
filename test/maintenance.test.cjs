@@ -58,11 +58,13 @@ test('init-project: auto-detects java-maven from pom.xml (mvn, not gradle) (#3)'
   });
 });
 
-test('init-project: seeds config.models (sdAuthor inherits, hybridExecutor pinned to sonnet, taskmaster seeded)', () => {
+const MODELS_DEFAULT = { sdAuthor: null, hybridExecutor: 'sonnet', codeReviewer: 'sonnet', taskmaster: { main: 'sonnet', research: 'sonnet' } };
+
+test('init-project: seeds config.models (sdAuthor inherits, hybridExecutor + codeReviewer pinned to sonnet, taskmaster seeded)', () => {
   inTmp(() => {
     maintenance['init-project']({});
     const cfg = JSON.parse(fs.readFileSync('.spec-flow/config.json', 'utf8'));
-    assert.deepEqual(cfg.models, { sdAuthor: null, hybridExecutor: 'sonnet', taskmaster: { main: 'sonnet', research: 'sonnet' } });
+    assert.deepEqual(cfg.models, MODELS_DEFAULT);
   });
 });
 
@@ -72,7 +74,45 @@ test('init-project: patches config.models into a pre-existing config.json missin
     fs.writeFileSync('.spec-flow/config.json', JSON.stringify({ project: 'p', stack: 'node' }));
     maintenance['init-project']({});
     const cfg = JSON.parse(fs.readFileSync('.spec-flow/config.json', 'utf8'));
-    assert.deepEqual(cfg.models, { sdAuthor: null, hybridExecutor: 'sonnet', taskmaster: { main: 'sonnet', research: 'sonnet' } });
+    assert.deepEqual(cfg.models, MODELS_DEFAULT);
+  });
+});
+
+test('init-project: seeds phase.codeReview: ask — the pre-ship gate defaults to asking', () => {
+  inTmp(() => {
+    maintenance['init-project']({});
+    const cfg = JSON.parse(fs.readFileSync('.spec-flow/config.json', 'utf8'));
+    assert.deepEqual(cfg.phase, { confirmTasks: true, taskNotes: false, codeReview: 'ask' });
+  });
+});
+
+test('init-project: back-fills phase.codeReview + models.codeReviewer into an older config without touching set values', () => {
+  inTmp(() => {
+    fs.mkdirSync('.spec-flow', { recursive: true });
+    fs.writeFileSync('.spec-flow/config.json', JSON.stringify({
+      project: 'p',
+      phase: { confirmTasks: false, taskNotes: true },
+      models: { sdAuthor: 'opus', hybridExecutor: 'opus', taskmaster: { main: 'opus', research: 'opus' } },
+    }));
+    maintenance['init-project']({});
+    const cfg = JSON.parse(fs.readFileSync('.spec-flow/config.json', 'utf8'));
+    // Back-filled, discoverable, and behaviour-neutral (absent already read as these).
+    assert.equal(cfg.phase.codeReview, 'ask');
+    assert.equal(cfg.models.codeReviewer, 'sonnet');
+    // Pre-existing choices survive the patch.
+    assert.equal(cfg.phase.confirmTasks, false);
+    assert.equal(cfg.phase.taskNotes, true);
+    assert.equal(cfg.models.hybridExecutor, 'opus');
+  });
+});
+
+test('init-project: an explicit phase.codeReview: off is never overwritten', () => {
+  inTmp(() => {
+    fs.mkdirSync('.spec-flow', { recursive: true });
+    fs.writeFileSync('.spec-flow/config.json', JSON.stringify({ project: 'p', phase: { confirmTasks: true, taskNotes: false, codeReview: 'off' } }));
+    maintenance['init-project']({});
+    const cfg = JSON.parse(fs.readFileSync('.spec-flow/config.json', 'utf8'));
+    assert.equal(cfg.phase.codeReview, 'off');
   });
 });
 
