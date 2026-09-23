@@ -11,7 +11,7 @@
     {
       "name": "sf",
       "source": "./",
-      "description": "Turns a requirements document into a design you approve, then implements it and records which file and which test cover each requirement.",
+      "description": "Approve one design doc; the agent builds it, tests it for real and opens the PR. Lightweight spec-driven development for Claude Code and Codex.",
       "category": "workflow"
     }
   ],
