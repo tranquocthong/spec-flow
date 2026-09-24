@@ -78,7 +78,7 @@ node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs epic-new \
   --subs "<approved sub-feature names comma-separated>"
 ```
 
-Confirm the result: `ok({ epic, path, subs })`. The epic record is written to `.spec-flow/epics/<slug>.md`.
+Confirm the result: `ok({ epic, dir, path, subs })`. The epic workspace is a directory at `.spec-flow/epics/<slug>/` containing `EPIC.md` and conventional subdirectories (`srs/`, `decisions/`, `state/`, `assets/`).
 
 ---
 
@@ -101,13 +101,23 @@ node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs trace-build \
   --feature <epic-slug>-<sub-slug>
 ```
 
-**5c. Snapshot the SRS baseline:**
+**5c. Register the bidirectional epic link:**
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs epic-attach \
+  --epic <epic-slug> \
+  --feature <epic-slug>-<sub-slug>
+```
+
+This writes the sub-feature into `EPIC.md`'s `## Sub-features` list and stamps `.spec-flow/specs/<epic-slug>-<sub-slug>/EPIC` with the parent slug. The call is idempotent — safe to re-run.
+
+**5d. Snapshot the SRS baseline:**
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs srs-snapshot --srs <srs-path>
 ```
 
-A single shared epic snapshot is fine for a **one-shot split that won't resync**. **But if the sub-features will evolve independently** (the usual case), prefer a **per-sub-feature snapshot** so a later `/sf:resync` knows which sub an SRS edit belongs to: split the epic SRS into `srs/<epic>-<sub>.md` slices and `srs-snapshot --srs <that slice>` per sub. Otherwise every sub diffs against the same epic baseline and `srs-diff` can't attribute a change to the right sub-feature (it now resolves the snapshot by feature name — a shared epic baseline defeats that). Decide per project; default to per-sub when in doubt.
+A single shared epic snapshot is fine for a **one-shot split that won't resync**. **But if the sub-features will evolve independently** (the usual case), prefer a **per-sub-feature snapshot** so a later `/sf:resync` knows which sub an SRS edit belongs to: split the epic SRS into per-sub slices placed at `.spec-flow/epics/<slug>/srs/<epic>-<sub>.md` and run `srs-snapshot --srs .spec-flow/epics/<slug>/srs/<epic>-<sub>.md` per sub. Otherwise every sub diffs against the same epic baseline and `srs-diff` can't attribute a change to the right sub-feature (it now resolves the snapshot by feature name — a shared epic baseline defeats that). Decide per project; default to per-sub when in doubt.
 
 ---
 

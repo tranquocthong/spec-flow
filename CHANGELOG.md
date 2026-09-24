@@ -2,6 +2,18 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [Unreleased]
+
+### Added
+
+- **An epic is now a directory, not a single file.** An epic spans many specs and many months, and the documents that belong to it belong to no single spec: the per-phase SRS, cross-phase decisions, environment state (SIT, UAT, handoff), gotchas, e2e mocks. `epic-new` used to write one `.spec-flow/epics/<slug>.md` with a hand-written `status: pending` that was wrong after the first phase, and sub-features were grouped only by a name prefix. In practice teams skipped it and built their own `epics/` folder outside `.spec-flow/`.
+  - `epic-new` creates `.spec-flow/epics/<slug>/` with `EPIC.md` and conventional `srs/ decisions/ state/ assets/` subdirectories. The subdirectories are a convention; nothing is enforced.
+  - `epic-attach --epic --feature` adds a feature to an epic and writes `specs/<feature>/EPIC` as the back link. A feature belongs to at most one epic (`EPIC_CONFLICT` otherwise). `/sf:ingest <srs> --epic <slug>` attaches as it ingests, creating the epic if needed, which fits the common case: phases ingested one at a time over months rather than split once.
+  - `epic-list` and the new `epic-show` compute progress from each sub-feature's real tasks and ship record (`done`, `total`, `shipped`) instead of trusting a written status. `/sf:status` shows the epic's progress when the active feature belongs to one.
+  - SD, tasks, checklist and verification stay in `specs/<feature>/`; the epic directory holds only cross-phase material.
+  - Single-file epics still list and show (`legacy: true`); `epic-attach` refuses them with the one-line conversion command, and nothing is migrated automatically.
+  - `/sf:doctor` warns (never fails) about single-file epics, links that disagree in either direction, and files in an epic directory whose names look like secrets (`priv_key`, `secret`, `.pem`, `.env`…) and that git does not ignore, since `.spec-flow/` is usually committed.
+
 ## [0.12.1] — 2026-09-24
 
 ### Fixed
