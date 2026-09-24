@@ -3573,6 +3573,72 @@ test('status-report: surfaces the ship marker', () => {
   assert.equal(after.data.shipped.ref, 'deadbee');
 });
 
+// ---------------------------------------------------------------------------
+// status-report: backlog summary + shipped next-step hint (SD backlog-registry
+// FR-022..FR-024, §10.6; CONTEXT C-7/C-8). `/sf:status` renders status-report's
+// JSON (commands/status.md) rather than a raw markdown "## Backlog" section —
+// state-update's STATE.md is a different artifact — so the closest faithful
+// equivalent of FR-022's "section with open count + top 3" is a pair of fields
+// mirroring the existing bugsOpen/bugsOpenList and changesOpen/changesOpenList
+// convention already in this same Result.
+// ---------------------------------------------------------------------------
+
+test('status-report: no backlog dir — output unchanged (FR-024 regression, captured before the backlog fields existed)', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  shippableFeature(dir, 'demo');
+  fs.writeFileSync(path.join(dir, '.spec-flow', 'trace.json'),
+    JSON.stringify({ feature: 'demo', nodes: {}, links: [] }));
+  run(['state-update', '--feature', 'demo', '--shipped', '--ref', 'abc1234'], dir);
+
+  const r = run(['status-report', '--feature', 'demo'], dir);
+  // Pre-existing fields keep exactly the value they had before this feature —
+  // in particular nextStep is NOT touched when there is nothing open to hint at.
+  assert.match(r.data.nextStep, /ship: stage/, 'nextStep text unchanged when backlog has no open items');
+  assert.doesNotMatch(r.data.nextStep, /backlog/i, 'no backlog mention when there is nothing open');
+  // New fields report the empty state rather than being entirely absent — see
+  // bugsOpen/changesOpen precedent (always-present counters, never omitted).
+  assert.equal(r.data.backlogOpen, 0, 'no backlog/ dir -> 0 open items');
+  assert.deepEqual(r.data.backlogOpenList, [], 'no backlog/ dir -> empty top list');
+});
+
+test('status-report: shipped feature + open backlog — nextStep hints the top-1 id + title (TC-006)', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  shippableFeature(dir, 'demo');
+  fs.writeFileSync(path.join(dir, '.spec-flow', 'trace.json'),
+    JSON.stringify({ feature: 'demo', nodes: {}, links: [] }));
+  run(['state-update', '--feature', 'demo', '--shipped', '--ref', 'abc1234'], dir);
+
+  run(['backlog-new', '--title', 'Improve error messages', '--priority', 'low'], dir);
+  run(['backlog-new', '--title', 'Add dark mode toggle', '--priority', 'high'], dir);
+  run(['backlog-new', '--title', 'Cache warm-up job', '--priority', 'medium'], dir);
+  run(['backlog-new', '--title', 'Extra low item', '--priority', 'low'], dir);
+
+  const r = run(['status-report', '--feature', 'demo'], dir);
+  assert.equal(r.data.backlogOpen, 4, 'counts every open item, not just the top 3');
+  assert.equal(r.data.backlogOpenList.length, 3, 'top 3 only, per backlog-list order');
+  assert.equal(r.data.backlogOpenList[0].title, 'Add dark mode toggle', 'high priority sorts first');
+  assert.match(r.data.nextStep, /Add dark mode toggle/, 'nextStep hint names the top-1 title');
+  assert.match(r.data.nextStep, new RegExp(r.data.backlogOpenList[0].id), 'nextStep hint names the top-1 id');
+});
+
+test('status-report: open backlog is reported even before the feature ships, but nextStep gets no hint yet (CONTEXT C-8)', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  shippableFeature(dir, 'demo'); // NOT shipped — no state-update --shipped call
+  fs.writeFileSync(path.join(dir, '.spec-flow', 'trace.json'),
+    JSON.stringify({ feature: 'demo', nodes: {}, links: [] }));
+
+  run(['backlog-new', '--title', 'Someday maybe', '--priority', 'high'], dir);
+
+  const r = run(['status-report', '--feature', 'demo'], dir);
+  assert.equal(r.data.shipped, null);
+  assert.equal(r.data.backlogOpen, 1, 'still surfaced — the summary itself does not depend on shipped');
+  assert.equal(r.data.backlogOpenList[0].title, 'Someday maybe');
+  assert.doesNotMatch(r.data.nextStep, /Someday maybe/, 'hint only appended once the feature has shipped');
+});
+
 test('status-report: codeReview is null until the optional gate has actually run', () => {
   const dir = tmpProject();
   initProject(dir);
@@ -3997,4 +4063,30 @@ test('status-report: verified-adhoc on the status line counts as verified', () =
   const r = run(['status-report', '--feature', 'demo'], dir);
   assert.equal(r.ok, true);
   assert.equal(r.data.verified, true, 'verified-adhoc is a shippable status');
+});
+
+test('state-update: shipped "nothing pending" nextStep names the top open backlog item (FR-023), unchanged without one (FR-024)', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  const fDir = path.join(dir, '.spec-flow', 'specs', 'feat-s');
+  fs.mkdirSync(fDir, { recursive: true });
+  fs.writeFileSync(path.join(fDir, 'SD.md'), '# SD: feat-s\n');
+  fs.writeFileSync(path.join(fDir, 'CHECKLIST.yaml'), 'suites: []\n');
+  let r = run(['task-add', '--tag', 'feat-s', '--title', 'Only task'], dir);
+  assert.equal(r.ok, true);
+  r = run(['task-set-status', '--tag', 'feat-s', '--id', r.data.id, '--status', 'done'], dir);
+  assert.equal(r.ok, true);
+
+  r = run(['state-update', '--feature', 'feat-s', '--shipped'], dir);
+  assert.equal(r.ok, true);
+  assert.match(r.data.nextStep, /nothing pending/);
+  const before = r.data.nextStep;
+  assert.ok(!/Backlog:/.test(before), 'no backlog dir → nextStep unchanged');
+
+  run(['backlog-new', '--title', 'Low thing', '--priority', 'low'], dir);
+  run(['backlog-new', '--title', 'Urgent thing', '--priority', 'high'], dir);
+  r = run(['state-update', '--feature', 'feat-s'], dir);
+  assert.equal(r.ok, true);
+  assert.ok(r.data.nextStep.startsWith(before), 'hint is appended, original text kept');
+  assert.match(r.data.nextStep, /Backlog: 2 open — top: bl-002 "Urgent thing"/);
 });
