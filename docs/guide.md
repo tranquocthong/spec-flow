@@ -159,6 +159,25 @@ Everything policy-shaped lives as data in `.spec-flow/config.json`, seeded by `/
 
 **Verification gate.** `verify.testCommand`, `coverageThreshold`, `forbiddenPatterns`, `secretScan`, per repo when a feature spans several repositories (`config.repos`).
 
+**Code rules.** Team coding rules are enforced in two layers.
+
+- *Machine-checkable* rules go in `verify.rules`. `verify-code` runs them on every task and fails on a violation **in the code this branch added or changed** (against the merge-base with `branching.base`, uncommitted and untracked files included). Violations already in old code do not fail; they are counted as `preexisting` so the debt stays visible. That is what makes a rule safe to add to a project that already breaks it. Each rule has an `id`, a `message`, an optional `glob`/`exclude`, and either `forbid` (a line regex) or `when` + `require` (a file that matches `when` must also match `require`). `scope: "all"` checks the whole tree instead, once a team has cleaned up. A malformed rule is skipped with a warning and never fails the gate; `/sf:doctor` lists what is wrong with it.
+
+  ```json
+  "rules": [
+    { "id": "no-response-entity", "glob": "**/*Controller.java", "forbid": "ResponseEntity<",
+      "message": "Use @ResponseStatus and return the body" },
+    { "id": "scheduled-needs-shedlock", "glob": "**/*.java", "when": "@Scheduled", "require": "@SchedulerLock",
+      "message": "Multi-pod: every @Scheduled job needs @SchedulerLock" },
+    { "id": "timestamptz", "glob": "**/migration/*.sql", "forbid": "\\btimestamp\\b(?!\\s+with\\s+time\\s+zone)",
+      "message": "Use timestamptz" }
+  ]
+  ```
+
+- *Judgment* rules go as bullets under `## Code Rules` in `project-author.md`. `/sf:phase` pastes them verbatim into every executor prompt, and the executor must return one `pass | n/a | violated` row per bullet; a missing table or an open `violated` row is sent back. The pre-ship reviewer answers each bullet as a checklist item, and any violation is a `project-rule` finding that **blocks the ship** (severity at least `medium`), with `review-accept` as the explicit override.
+
+`forbiddenPatterns` keeps its old behaviour (whole `scanPath`, every task) for existing projects; new rules belong in `verify.rules`.
+
 **Language.** `language: "vi"` makes the agent reply and author SD prose in Vietnamese. Code, identifiers, commit messages, section headings and FR/TC ids stay English. SRS harvesting understands English and Vietnamese keyword packs.
 
 **Phase.** `phase.confirmTasks` asks before seeding tasks. `phase.taskNotes` turns on per-task AI progress notes (off by default, they cost one AI call per task).

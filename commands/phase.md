@@ -73,11 +73,13 @@ Deterministic per-FR complexity (1–10) — this is the **only** complexity sig
    ```
    Returns `ready` (dependencies all `done`). It does **not** prove file-disjointness — files touched aren't known until a task runs. If `ready` has ≥2 tasks, judge disjointness yourself from each `title`/`details` (`task-get --id <id>`): different component/layer/file, no shared entity → safe to batch. Same file or one extends the other → sequential. **When in doubt, sequential** — a wrong guess means two executors clobber the same file with no worktree isolation. Otherwise: `task-next --tag <feature>`.
 
-2. **Spawn hybrid-executor** — one per task selected in step 1 (multiple Agent calls in ONE message when the batch is file-disjoint). Give it: task details + `CONTEXT.md` + the relevant SD section refs. **Code stays English even when `config.language` ≠ `en`** (that setting is conversation + docs only). **Model:** `config.json → models.hybridExecutor`; non-null → pass as the Agent `model` param, else omit.
+2. **Spawn hybrid-executor** — one per task selected in step 1 (multiple Agent calls in ONE message when the batch is file-disjoint). Give it: task details + `CONTEXT.md` + the relevant SD section refs. Before spawning, extract the bullets under `## Code Rules` in `.spec-flow/project-author.md` (if any) and paste them **verbatim** into every executor prompt — binding, not "read if present". **Code stays English even when `config.language` ≠ `en`** (that setting is conversation + docs only). **Model:** `config.json → models.hybridExecutor`; non-null → pass as the Agent `model` param, else omit.
 
    **Parallel batch:** steps 3-6 still run once per task, in any order — safe only because you judged the batch file-disjoint. Do **not** parallelize `trace-build` (it rebuilds the whole file); run it once after every task in the batch has logged its `trace-link`.
 
    **Check TDD evidence in the executor's summary before proceeding.** Feature task: a test file written plus either `gate: "red-confirmed"` or an explicit note that testCommand is not configured — if neither, ask for the RED confirmation. Chore task: "chore — RED phase skipped" is expected.
+
+   **Check the `## Code Rules` compliance table the same way.** `## Code Rules` had ≥1 bullet and the summary is missing the table, missing a bullet's row, or has any row `violated` → send it back, do not proceed. Zero bullets → no table expected.
 
 3. **Record the disk facts — ALWAYS.** These are what `/sf:status` reads:
    ```
@@ -101,7 +103,7 @@ Deterministic per-FR complexity (1–10) — this is the **only** complexity sig
    ```
    node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs verify-code --feature <feature> --task <id>
    ```
-   **Always pass `--task <id>`** — it scopes `tests` to this task's own test file(s) (via step 3's `trace-link`) instead of the full suite; that is the main lever for phase speed on a multi-task SD (the full suite runs once, at close-out 1a). Static checks scan the whole scoped root regardless. **Multi-repo: always also pass `--feature`.**
+   **Always pass `--task <id>`** — it scopes `tests` to this task's own test file(s) (via step 3's `trace-link`) instead of the full suite; that is the main lever for phase speed on a multi-task SD (the full suite runs once, at close-out 1a). Static checks scan the whole scoped root regardless, including `code-rules` (from `config.verify.rules`) — a `code-rules` failure halts like any other static check. **Multi-repo: always also pass `--feature`.**
    - `gate: "fail"` → `task-set-status` → `review`; surface `detail` + `fix`; **halt**.
    - `gate: "pass"` → proceed. Confirms THIS task's tests + static checks, not the whole codebase.
    - `gate: "skipped"` → **nothing was verified** (no `verify` block). Do NOT report the code as verified. Say so **once per phase, on the first task only**, then stay silent on it.
@@ -182,7 +184,7 @@ Deterministic per-FR complexity (1–10) — this is the **only** complexity sig
    - `context` — why the feature exists, and the constraints it was built under.
    - `checklist` — the behaviours that already have a manual test.
    - `verification` — what ran green, and the `## Not verified live` gaps that are already **known and accepted**. Re-reporting a declared gap is noise.
-   - `projectAuthor` — the team's own conventions. House style is not a finding.
+   - `projectAuthor` — `## Code Rules` bullets are a mandatory checklist the reviewer must answer one by one; a violation is a finding with `category: "project-rule"`, `checkedAgainst` = the rule text, severity ≥ `medium`; `review-collect` treats every `project-rule` finding as blocking. Conventions outside `## Code Rules` (taste, naming) stay at most `low`, unchanged.
    - `trace` — the FR→TC links, for checking a claim against its coverage.
 
    **Give it the scope:** `range` when non-null, else the `files` list (multi-repo: always `files`, plus the `repos` roots — the hub repo holds no code). Tell it the diff may contain files outside this SD; **review only what this feature's FRs own**.
@@ -192,12 +194,12 @@ Deterministic per-FR complexity (1–10) — this is the **only** complexity sig
    - **`verify-code` and the full regression already passed.** Do not report "this needs a test" for behaviour the checklist covers, and do not re-derive what the test suite proved.
    - **Before writing any `critical` or `high`, check it against the SD and the checklist.** Specified behaviour → not a finding. Covered by a TC → at most `low`. Only reachable through an input the FR forbids → at most `medium`.
    - **A `critical`/`high` must name a concrete failure:** the inputs or state that trigger it, and the wrong result that follows. **If you cannot write that sentence, it is not critical or high.** This single rule is what keeps the severity ladder meaningful — a vague worry cannot be phrased as a failure scenario.
-   - **Taste is `low`.** Naming, structure, and "I would have written it differently" never exceed `low`, whatever their volume.
+   - **Taste is `low`.** Naming, structure, and "I would have written it differently" never exceed `low`, whatever their volume — unless it breaks a `## Code Rules` bullet, which is a `project-rule` finding and blocks the ship like a `high`.
    - **Empty `findings` is a valid, expected, and common answer.** An invented finding costs the user more than a missed one, because it spends the credibility the next real finding needs.
 
    **Output contract:**
    ```json
-   {"findings":[{"severity":"critical|high|medium|low|info","title":"...","file":"path","line":12,"category":"correctness|security|spec-mismatch|simplification|efficiency","detail":"concrete failure: inputs/state -> wrong result","suggestion":"...","checkedAgainst":"FR-007 / TC-014 / none"}]}
+   {"findings":[{"severity":"critical|high|medium|low|info","title":"...","file":"path","line":12,"category":"correctness|security|spec-mismatch|simplification|efficiency|project-rule","detail":"concrete failure: inputs/state -> wrong result","suggestion":"...","checkedAgainst":"FR-007 / TC-014 / none"}]}
    ```
    `checkedAgainst` is required on every `critical`/`high`: the FR or TC the finding was tested against, or `none` when the behaviour is unspecified. **A blocking finding with no `checkedAgainst` was not checked** — send it back rather than collecting it.
 
