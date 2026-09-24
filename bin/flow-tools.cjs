@@ -13,7 +13,7 @@
  *           trace-repos, trace-link, srs-diff, state-update, verify-collect, verify-code, wave-plan,
  *           review-scope, review-collect, review-accept,
  *           task-baseline, taskmaster-model-plan, taskmaster-model-check,
- *           epic-new, epic-list, bug-new, bug-list, branch-ensure,
+ *           epic-new, epic-attach, epic-list, epic-show, bug-new, bug-list, branch-ensure,
  *           backlog-new, backlog-list, backlog-set,
  *           learn, doctor, status-report
  */
@@ -887,7 +887,32 @@ const commands = {
       fs.writeFileSync(STATE_FILE, stateContent);        // active-feature mirror
     } catch (e) { return err(`WRITE_FAILED: ${e.message}`); }
 
-    return ok({ state: STATE_FILE, perFeatureState, switchedFrom, shipped: shipped ? { shippedAt: shipped.shippedAt, ref: shipped.ref } : null, lines: lineCount, nextStep, warnings: stateWarnings });
+    // Epic field — only when feature has a reverse-link file (FR-023)
+    let epicField = {};
+    if (featureName && featureName !== 'unknown') {
+      const epicLinkPath = path.join(PATHS.specs, featureName, 'EPIC');
+      if (fs.existsSync(epicLinkPath)) {
+        try {
+          const epicId = fs.readFileSync(epicLinkPath, 'utf8').trim();
+          const epicMdPath = path.join(STATE_DIR, 'epics', epicId, 'EPIC.md');
+          let epicProgress = { done: 0, total: 0, shipped: 0 };
+          if (fs.existsSync(epicMdPath)) {
+            const epicMd = fs.readFileSync(epicMdPath, 'utf8');
+            const subMatch = epicMd.match(/##\s+Sub-features\s*\n([\s\S]*?)(?=\n##|$)/);
+            const subs = subMatch ? subMatch[1].match(/^-\s+(\S+)/gm) || [] : [];
+            const subSlugs = subs.map(l => l.replace(/^-\s+/, ''));
+            epicProgress.total = subSlugs.length;
+            for (const sub of subSlugs) {
+              if (fs.existsSync(path.join(PATHS.specs, sub, 'ship.json'))) epicProgress.shipped++;
+              const subTasks = tmTasks ? readTmTasks(tmTasks, sub) : [];
+              if (subTasks.length > 0 && subTasks.every(t => String(t.status || '') === 'done')) epicProgress.done++;
+            }
+          }
+          epicField = { epic: { id: epicId, progress: epicProgress } };
+        } catch {}
+      }
+    }
+    return ok({ state: STATE_FILE, perFeatureState, switchedFrom, shipped: shipped ? { shippedAt: shipped.shippedAt, ref: shipped.ref } : null, lines: lineCount, nextStep, warnings: stateWarnings, ...epicField });
   },
 
   // -----------------------------------------------------------------------
@@ -1066,28 +1091,41 @@ const commands = {
     const name = args.name;
     if (!name) return err('MISSING_ARG: --name <epic-name>');
 
-    const epicSlug = slugify(name);
+    // Compute raw slug without fallback to detect invalid input (FR-007)
+    const rawSlug = String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+    if (!rawSlug) return err(`INVALID_SLUG: '${name}' slugifies to an empty or invalid slug`);
+    const epicSlug = rawSlug;
+
     const epicsDir = path.join(STATE_DIR, 'epics');
     ensureDir(epicsDir);
 
-    const epicPath = path.join(epicsDir, `${epicSlug}.md`);
-    if (fs.existsSync(epicPath)) {
-      return ok({ alreadyExists: true, epic: epicSlug, path: epicPath });
+    // Directory-workspace layout (FR-001)
+    const epicDir = path.join(epicsDir, epicSlug);
+    const epicPath = path.join(epicDir, 'EPIC.md');
+
+    // Idempotency: if directory already exists, return alreadyExists (FR-004)
+    if (fs.existsSync(epicDir)) {
+      return ok({ alreadyExists: true, epic: epicSlug, path: epicPath, dir: epicDir });
     }
 
-    // Parse sub-feature names
-    const rawSubs = args.subs ? String(args.subs).split(',').map(s => s.trim()).filter(Boolean) : [];
-    const subs = rawSubs.map(subName => ({
-      name: subName,
-      slug: slugify(subName),
-      status: 'pending',
-      sdPath: `${epicSlug}-${slugify(subName)}/SD.md`,
-    }));
+    // Create directory and subdirectories with .gitkeep (FR-001, FR-002)
+    ensureDir(epicDir);
+    for (const subdir of ['srs', 'decisions', 'state', 'assets']) {
+      const subdirPath = path.join(epicDir, subdir);
+      ensureDir(subdirPath);
+      try { fs.writeFileSync(path.join(subdirPath, '.gitkeep'), ''); } catch (e) { return err(`WRITE_FAILED: ${e.message}`); }
+    }
 
+    // Parse sub-feature names (FR-003)
+    const rawSubs = args.subs ? String(args.subs).split(',').map(s => s.trim()).filter(Boolean) : [];
+    const subSlugs = rawSubs.map(subName => {
+      const subRaw = String(subName).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+      return `${epicSlug}-${subRaw}`;
+    });
+
+    // Build EPIC.md content (FR-002)
     const now = new Date().toISOString();
     const lines = [];
-    lines.push(`# Epic: ${name}`);
-    lines.push('');
     lines.push('<!-- spec-flow epic record -->');
     lines.push(`id: ${epicSlug}`);
     lines.push(`name: ${name}`);
@@ -1096,57 +1134,364 @@ const commands = {
     lines.push('');
     lines.push('## Sub-features');
     lines.push('');
-    if (subs.length) {
-      for (const sub of subs) {
-        lines.push(`- **${sub.name}**`);
-        lines.push(`  - status: ${sub.status}`);
-        lines.push(`  - sd: \`${sub.sdPath}\``);
-        lines.push('');
-      }
-    } else {
-      lines.push('> No sub-features defined yet. Run epic-new again with --subs "subA,subB,..." or add manually.');
-      lines.push('');
+    for (const subSlug of subSlugs) {
+      lines.push(`- ${subSlug}`);
     }
+    lines.push('');
+    lines.push('## Layout');
+    lines.push('');
+    lines.push('- `srs/` — SRS slice per phase');
+    lines.push('- `decisions/` — Cross-phase decisions');
+    lines.push('- `state/` — Environment state (SIT/UAT/prod)');
+    lines.push('- `assets/` — Mocks, scripts, non-spec resources');
 
     const content = lines.join('\n');
     try { fs.writeFileSync(epicPath, content); } catch (e) { return err(`WRITE_FAILED: ${e.message}`); }
 
-    return ok({ epic: epicSlug, path: epicPath, subs });
+    // FR-005: return shape
+    return ok({ epic: epicSlug, path: epicPath, dir: epicDir, subs: subSlugs });
+  },
+
+  // -----------------------------------------------------------------------
+  // epic-attach  --epic <slug>  --feature <feature-slug>
+  //
+  // Link an existing feature to a directory-workspace epic.
+  //   - Writes `- <feature>` into the `## Sub-features` section of EPIC.md
+  //   - Writes `.spec-flow/specs/<feature>/EPIC` with the epic slug
+  // Idempotent: if both links already exist, returns alreadyAttached:true.
+  // FR-008..015, FR-033, FR-035
+  // -----------------------------------------------------------------------
+  'epic-attach'(args) {
+    const slug = args.epic;
+    const feature = args.feature;
+
+    // FR-014: validate required args
+    if (!slug || !feature) {
+      return err('MISSING_ARG: --epic <slug> and --feature <feature-slug>');
+    }
+
+    const epicsDir = path.join(STATE_DIR, 'epics');
+    const epicDir = path.join(epicsDir, slug);
+    const legacyFile = path.join(epicsDir, `${slug}.md`);
+    const epicMdPath = path.join(epicDir, 'EPIC.md');
+
+    // FR-015, FR-012: find the epic
+    if (fs.existsSync(epicDir) && fs.statSync(epicDir).isDirectory()) {
+      // directory workspace — proceed
+    } else if (fs.existsSync(legacyFile) && fs.statSync(legacyFile).isFile()) {
+      // FR-012: legacy single-file epic
+      return err(`EPIC_LEGACY: epic '${slug}' is a legacy single-file epic. Convert it to a directory first: mkdir epics/${slug}/ && mv epics/${slug}.md epics/${slug}/EPIC.md`);
+    } else {
+      // FR-012: not found
+      return err(`EPIC_NOT_FOUND: no epic '${slug}' in .spec-flow/epics/`);
+    }
+
+    // FR-035, FR-013: check reverse link
+    const specsFeatureDir = path.join(PATHS.specs, feature);
+    const epicLinkFile = path.join(specsFeatureDir, 'EPIC');
+    let epicLinkExists = false;
+
+    if (fs.existsSync(epicLinkFile)) {
+      let existingSlug;
+      try { existingSlug = fs.readFileSync(epicLinkFile, 'utf8').trim(); } catch (e) { return err(`READ_FAILED: ${e.message}`); }
+
+      if (existingSlug === slug) {
+        // Feature already points to this epic — check if EPIC.md also has the entry
+        epicLinkExists = true;
+        let epicMdContent;
+        try { epicMdContent = fs.existsSync(epicMdPath) ? fs.readFileSync(epicMdPath, 'utf8') : ''; } catch (e) { return err(`READ_FAILED: ${e.message}`); }
+        const alreadyInMd = epicMdContent.split('\n').some(line => line.trim() === `- ${feature}`);
+        if (alreadyInMd) {
+          return ok({ epic: slug, feature, alreadyAttached: true });
+        }
+        // Partial state: EPIC file correct but not in EPIC.md — fall through to re-add
+      } else {
+        // Feature belongs to a different epic
+        return err(`EPIC_CONFLICT: feature '${feature}' already belongs to epic '${existingSlug}'. Remove specs/${feature}/EPIC first.`);
+      }
+    }
+
+    // FR-010: ensure specs/<feature>/ directory exists
+    ensureDir(specsFeatureDir);
+
+    // FR-008: update EPIC.md — insert `- <feature>` in ## Sub-features section
+    let epicMdContent;
+    try { epicMdContent = fs.existsSync(epicMdPath) ? fs.readFileSync(epicMdPath, 'utf8') : ''; } catch (e) { return err(`READ_FAILED: ${e.message}`); }
+
+    // Find the ## Sub-features heading and insert after existing entries
+    const lines = epicMdContent.split('\n');
+    const headingIdx = lines.findIndex(l => l.trim() === '## Sub-features');
+    if (headingIdx === -1) {
+      // No section found — append one at the end
+      const newLines = lines.concat(['', '## Sub-features', '', `- ${feature}`, '']);
+      try { fs.writeFileSync(epicMdPath, newLines.join('\n')); } catch (e) { return err(`WRITE_FAILED: ${e.message}`); }
+    } else {
+      // Find the last `- ` entry under ## Sub-features (stop at next `## ` heading or end)
+      let insertIdx = headingIdx + 1;
+      // Skip blank line(s) right after heading
+      while (insertIdx < lines.length && lines[insertIdx].trim() === '') insertIdx++;
+      // Skip existing list entries
+      while (insertIdx < lines.length && lines[insertIdx].startsWith('- ')) insertIdx++;
+      // insertIdx now points to the line after the last list entry (blank or next heading)
+      lines.splice(insertIdx, 0, `- ${feature}`);
+      try { fs.writeFileSync(epicMdPath, lines.join('\n')); } catch (e) { return err(`WRITE_FAILED: ${e.message}`); }
+    }
+
+    // FR-009: write reverse link
+    try { fs.writeFileSync(epicLinkFile, `${slug}\n`); } catch (e) { return err(`WRITE_FAILED: ${e.message}`); }
+
+    // FR-011: return result
+    return ok({ epic: slug, feature, alreadyAttached: false });
   },
 
   // -----------------------------------------------------------------------
   // epic-list
-  // List .spec-flow/epics/*.md with id + name + status + subCount.
-  // Returns ok({ epics: [{ id, name, status, subCount }] }).
+  // Scan .spec-flow/epics/ for both directory-workspace epics and legacy .md epics.
+  // Returns ok({ epics: [{ id, name, status, subCount, progress, legacy, [EPIC_DUPLICATE?] }] }).
+  // FR-016..019, FR-036, FR-037
   // -----------------------------------------------------------------------
   'epic-list'(args) {
     const epicsDir = path.join(STATE_DIR, 'epics');
     ensureDir(epicsDir);
-    let files;
-    try { files = fs.readdirSync(epicsDir).filter(f => f.endsWith('.md')).sort(); }
+
+    let entries;
+    try { entries = fs.readdirSync(epicsDir); }
     catch (e) { return err(`READ_FAILED: ${e.message}`); }
 
+    // Collect directory slugs and legacy .md slugs
+    const dirSlugs = new Set();
+    const legacySlugs = new Set();
+    for (const entry of entries) {
+      const fullPath = path.join(epicsDir, entry);
+      try {
+        const stat = fs.statSync(fullPath);
+        if (stat.isDirectory()) {
+          dirSlugs.add(entry);
+        } else if (entry.endsWith('.md')) {
+          legacySlugs.add(entry.slice(0, -3));
+        }
+      } catch { /* skip unreadable entries */ }
+    }
+
+    // Union of all unique slugs
+    const allSlugs = new Set([...dirSlugs, ...legacySlugs]);
+
+    // Load tasks.json once for all progress lookups (FR-036: graceful if missing)
+    const tmPath = path.join(process.cwd(), '.taskmaster', 'tasks', 'tasks.json');
+    const tmData = readJsonSafe(tmPath, null);
+
+    // Parse fields from content using simple key: value format
+    const parseField = (content, key) => {
+      const m = content.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
+      return m ? m[1].trim() : null;
+    };
+
+    // Parse sub-feature slugs from content (FR-016)
+    // Directory format: bare "- slug" lines under ## Sub-features (NOT "- **")
+    // Legacy format: "- **name**" lines OR bare "- slug" lines
+    const parseSubSlugs = (content, isLegacy) => {
+      const subSectionMatch = content.match(/^## Sub-features\s*$([\s\S]*?)(?=^##|\Z)/m);
+      if (!subSectionMatch) return [];
+      const subSection = subSectionMatch[1];
+      const slugs = [];
+      for (const line of subSection.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('- ')) continue;
+        const rest = trimmed.slice(2).trim();
+        if (rest.startsWith('**')) {
+          // Legacy bold format: "- **name**" — extract name and slugify
+          const boldMatch = rest.match(/^\*\*(.+?)\*\*$/);
+          if (boldMatch) {
+            slugs.push(slugify(boldMatch[1]));
+          }
+        } else if (rest.length > 0) {
+          // Bare slug format: "- slug"
+          slugs.push(rest);
+        }
+      }
+      return slugs;
+    };
+
+    // Compute progress for a list of sub-feature slugs (FR-017, FR-018, FR-036)
+    const computeProgress = (subSlugs) => {
+      let done = 0;
+      let shipped = 0;
+      const total = subSlugs.length;
+      for (const subSlug of subSlugs) {
+        // Check shipped: specs/<subSlug>/ship.json exists
+        const shipPath = path.join(STATE_DIR, 'specs', subSlug, 'ship.json');
+        if (fs.existsSync(shipPath)) shipped++;
+        // Check done: all tasks for subSlug have status 'done' (FR-036: graceful if missing)
+        const subTasks = readTmTasks(tmData, subSlug);
+        const totalTasks = subTasks.length;
+        const doneTasks = subTasks.filter(t => t.status === 'done').length;
+        if (totalTasks > 0 && doneTasks === totalTasks) done++;
+      }
+      return { done, total, shipped };
+    };
+
     const epics = [];
-    for (const f of files) {
-      const epicPath = path.join(epicsDir, f);
+    for (const slug of [...allSlugs].sort()) {
+      const isDir = dirSlugs.has(slug);
+      const isLegacy = legacySlugs.has(slug);
+      const isDuplicate = isDir && isLegacy;
+
+      // Read content from the primary source (directory takes precedence for duplicates)
       let content = '';
-      try { content = fs.readFileSync(epicPath, 'utf8'); } catch { continue; }
-      // Parse simple frontmatter-ish fields
-      const field = (key) => {
-        const m = content.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
-        return m ? m[1].trim() : null;
-      };
-      // Count sub-features: lines starting with "- **"
-      const subCount = (content.match(/^- \*\*/gm) || []).length;
-      epics.push({
-        id: field('id') || path.basename(f, '.md'),
-        name: field('name') || path.basename(f, '.md'),
-        status: field('status') || 'unknown',
+      let legacy = false;
+      if (isDir) {
+        const epicMdPath = path.join(epicsDir, slug, 'EPIC.md');
+        try { content = fs.readFileSync(epicMdPath, 'utf8'); } catch { content = ''; }
+        legacy = false;
+      } else {
+        const legacyPath = path.join(epicsDir, `${slug}.md`);
+        try { content = fs.readFileSync(legacyPath, 'utf8'); } catch { content = ''; }
+        legacy = true;
+      }
+
+      const subSlugs = parseSubSlugs(content, legacy);
+      const subCount = subSlugs.length;
+      const progress = computeProgress(subSlugs);
+
+      const entry = {
+        id: parseField(content, 'id') || slug,
+        name: parseField(content, 'name') || slug,
+        status: parseField(content, 'status') || 'unknown',
         subCount,
-      });
+        progress,
+        legacy,
+      };
+
+      // FR-019: flag duplicate (both dir and .md exist)
+      if (isDuplicate) {
+        entry.EPIC_DUPLICATE = `both epics/${slug}/ and epics/${slug}.md exist; directory takes precedence`;
+      }
+
+      epics.push(entry);
     }
 
     return ok({ epics });
+  },
+
+  // -----------------------------------------------------------------------
+  // epic-show  --epic <slug>
+  //
+  // Show detailed information for a single directory-workspace epic.
+  // Returns ok({ id, name, status, subCount, progress, legacy, subs, files })
+  // or err if --epic missing or epic directory not found.
+  // FR-020, FR-021, FR-022, FR-034
+  // -----------------------------------------------------------------------
+  'epic-show'(args) {
+    const slug = args.epic;
+    if (!slug) return err('MISSING_ARG: --epic <slug>');
+
+    const epicsDir = path.join(STATE_DIR, 'epics');
+    const epicDir = path.join(epicsDir, slug);
+
+    // FR-022: check epic directory exists
+    if (!fs.existsSync(epicDir) || !fs.statSync(epicDir).isDirectory()) {
+      return err(`EPIC_NOT_FOUND: no epic '${slug}' in .spec-flow/epics/`);
+    }
+
+    // Read EPIC.md content
+    const epicMdPath = path.join(epicDir, 'EPIC.md');
+    let content = '';
+    try { content = fs.readFileSync(epicMdPath, 'utf8'); } catch { content = ''; }
+
+    // Parse key: value fields
+    const parseField = (c, key) => {
+      const m = c.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
+      return m ? m[1].trim() : null;
+    };
+
+    // Parse sub-feature slugs from ## Sub-features section (bare "- slug" lines)
+    const parseSubSlugs = (c) => {
+      const subSectionMatch = c.match(/^## Sub-features\s*$([\s\S]*?)(?=^##|\Z)/m);
+      if (!subSectionMatch) return [];
+      const subSection = subSectionMatch[1];
+      const slugs = [];
+      for (const line of subSection.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('- ')) continue;
+        const rest = trimmed.slice(2).trim();
+        if (rest.length > 0 && !rest.startsWith('**')) {
+          slugs.push(rest);
+        }
+      }
+      return slugs;
+    };
+
+    const subSlugs = parseSubSlugs(content);
+    const subCount = subSlugs.length;
+
+    // Load tasks.json once for progress lookups (FR-036: graceful if missing)
+    const tmPath = path.join(process.cwd(), '.taskmaster', 'tasks', 'tasks.json');
+    const tmData = readJsonSafe(tmPath, null);
+
+    // Compute aggregate progress (FR-020)
+    let progressDone = 0;
+    let progressShipped = 0;
+    const progressTotal = subCount;
+
+    // Build per-sub detail array (FR-020)
+    const subs = subSlugs.map(subSlug => {
+      const sdPath = path.join(PATHS.specs, subSlug, 'SD.md');
+      const hasSd = fs.existsSync(sdPath);
+
+      const subTasks = readTmTasks(tmData, subSlug);
+      const totalTasks = subTasks.length;
+      const doneTasks = subTasks.filter(t => t.status === 'done').length;
+
+      const shipPath = path.join(STATE_DIR, 'specs', subSlug, 'ship.json');
+      const shipped = fs.existsSync(shipPath);
+      let shippedAt = null;
+      if (shipped) {
+        const shipData = readJsonSafe(shipPath, {});
+        shippedAt = shipData.shippedAt || null;
+      }
+
+      // Update aggregate progress
+      if (shipped) progressShipped++;
+      if (totalTasks > 0 && doneTasks === totalTasks) progressDone++;
+
+      return {
+        feature: subSlug,
+        hasSd,
+        tasks: { done: doneTasks, total: totalTasks },
+        shipped,
+        shippedAt,
+      };
+    });
+
+    // FR-021: recursively list all files in epic directory, relative to epic dir root
+    const listFilesRecursive = (dir, base) => {
+      const results = [];
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+      catch { return results; }
+      for (const entry of entries) {
+        const rel = base ? `${base}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) {
+          results.push(...listFilesRecursive(path.join(dir, entry.name), rel));
+        } else {
+          results.push(rel);
+        }
+      }
+      return results;
+    };
+
+    const files = listFilesRecursive(epicDir, '').sort();
+
+    return ok({
+      id: parseField(content, 'id') || slug,
+      name: parseField(content, 'name') || slug,
+      status: parseField(content, 'status') || 'unknown',
+      subCount,
+      progress: { done: progressDone, total: progressTotal, shipped: progressShipped },
+      legacy: false,
+      subs,
+      files,
+    });
   },
 
   // -----------------------------------------------------------------------
@@ -1819,6 +2164,31 @@ const commands = {
     if (changesOpen) resume.push(changesOpen === 1 ? `\`/sf:change --resume ${changesOpenList[0].id}\`` : `\`/sf:change --resume <id>\` (${changesOpen} open)`);
     if (resume.length) nextStep = `Resume in-flight → ${resume.join(' · ')} — or: ${nextStep}`;
 
+    // Epic field — only when feature has a reverse-link file (FR-023)
+    let epicField = {};
+    if (featureName) {
+      const epicLinkPath = path.join(PATHS.specs, featureName, 'EPIC');
+      if (fs.existsSync(epicLinkPath)) {
+        try {
+          const epicId = fs.readFileSync(epicLinkPath, 'utf8').trim();
+          const epicMdPath = path.join(STATE_DIR, 'epics', epicId, 'EPIC.md');
+          let epicProgress = { done: 0, total: 0, shipped: 0 };
+          if (fs.existsSync(epicMdPath)) {
+            const epicMd = fs.readFileSync(epicMdPath, 'utf8');
+            const subMatch = epicMd.match(/##\s+Sub-features\s*\n([\s\S]*?)(?=\n##|$)/);
+            const subs = subMatch ? subMatch[1].match(/^-\s+(\S+)/gm) || [] : [];
+            const subSlugs = subs.map(l => l.replace(/^-\s+/, ''));
+            epicProgress.total = subSlugs.length;
+            for (const sub of subSlugs) {
+              if (fs.existsSync(path.join(PATHS.specs, sub, 'ship.json'))) epicProgress.shipped++;
+              const subTasks = readTmTasks(tmRaw || {}, sub);
+              if (subTasks.length > 0 && subTasks.every(t => String(t.status || '') === 'done')) epicProgress.done++;
+            }
+          }
+          epicField = { epic: { id: epicId, progress: epicProgress } };
+        } catch {}
+      }
+    }
     return ok({
       project,
       branch,
@@ -1842,6 +2212,7 @@ const commands = {
       backlogOpen,
       backlogOpenList,
       nextStep,
+      ...epicField,
     });
   },
 
