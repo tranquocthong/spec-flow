@@ -2,6 +2,12 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [0.12.1] — 2026-09-24
+
+### Fixed
+
+- **`bug-new` numbered its next id by counting files, not by reading the highest existing id.** A count collides with a real id whenever the working tree doesn't have every file 1..N locally — e.g. `bug-004` already created on an unmerged branch/MR, while the current branch only sees 3 files and recomputes `004` for its own new bug. It now scans the `NNN-bug-` prefixes already on disk and assigns `max + 1`. Regression test added in `test/flow-tools.test.cjs`.
+
 ## [0.12.0] — 2026-09-22
 
 ### Added
