@@ -14,6 +14,7 @@
  *           review-scope, review-collect, review-accept,
  *           task-baseline, taskmaster-model-plan, taskmaster-model-check,
  *           epic-new, epic-list, bug-new, bug-list, branch-ensure,
+ *           backlog-new, backlog-list, backlog-set,
  *           learn, doctor, status-report
  */
 'use strict';
@@ -23,6 +24,7 @@ const {
   STATE_DIR, PATHS, PLUGIN_ROOT, STATE_FILE, SKIP_SCAN_DIRS, SD_COLS, ok, err, parseArgs, readJsonSafe, traceFileFor, readTrace, hydrateTrace, resolveActiveFeature, stateFileFor, stateFeatureOf, shipFileFor, ensureDir, slugify, pad3, readTmTasks, fileLinksPathFor, resolveRepos, parseReposArg, langPack, kwRe, cleanHeading, parseHeadings, bodyOf, classifyHeading, findHeading, findTableByHeader, parseFirstTable, parseAllTables, splitRow, resolveCols, tableShapeWarnings, parseUserStories, trimOrNull, extractBulletsAfter, inferDesignType, parseSrs, parseProseBullets, TODO, countSdTodos, mdCell, moscowFor, genSd, readSdTables, scoreComplexity, routeFor, tcIdsForReq, resolveTemplate
 } = require('../lib/core.cjs');
 const maintenance = require('../lib/maintenance.cjs');
+const backlog = require('../lib/backlog.cjs');
 const drift = require('../lib/drift.cjs');
 const taskCore = require('../lib/task-core.cjs');
 const tagManager = require('../lib/tag-manager.cjs');
@@ -796,6 +798,14 @@ const commands = {
         if (shipped) {
           const when = String(shipped.shippedAt || '').slice(0, 10);
           nextStep = `Shipped${when ? ` ${when}` : ''}${shipped.ref ? ` (${shipped.ref})` : ''} — nothing pending. Revise it with \`/sf:change ${featureName}\`, or start the next feature with \`/sf:ingest\`.`;
+          // FR-023: the re-anchor hook prints this line every turn, so it is where an
+          // open backlog is actually seen after a ship. No open items → unchanged (FR-024).
+          const openBacklog = backlog.readRecords(PATHS.backlog)
+            .filter((i) => i.status === 'open')
+            .sort(backlog.compareItems);
+          if (openBacklog.length) {
+            nextStep += ` Backlog: ${openBacklog.length} open — top: ${openBacklog[0].id} "${openBacklog[0].title}" (\`backlog-list\`).`;
+          }
         } else {
           nextStep = verified
             ? 'Done + verified — ship: stage, then `commit` skill (push).'
@@ -1382,6 +1392,175 @@ const commands = {
   },
 
   // -----------------------------------------------------------------------
+  // backlog-new --title <text> --priority high|medium|low
+  //             [--desc <text>] [--feature <f>] [--epic <e>]
+  // Create a new backlog record at .spec-flow/backlog/<NNN>-bl-<slug>.md
+  // (id stays bl-NNN). Priority is REQUIRED — no silent default (CONTEXT
+  // C-2), unlike bug-new's severity default.
+  // Returns ok({ id, path, priority }).
+  // SD §5.1 FR-001..FR-009, FR-026; §10.2.
+  // -----------------------------------------------------------------------
+  'backlog-new'(args) {
+    const title = args.title && args.title !== true ? args.title : null;
+    if (!title) return err('MISSING_ARG: --title "<text>"');
+
+    const priority = args.priority && args.priority !== true ? args.priority : null;
+    if (!priority) return err('MISSING_ARG: --priority high|medium|low');
+    if (!backlog.BACKLOG_VALID_PRIORITIES.includes(priority)) {
+      return err(`INVALID_PRIORITY: ${backlog.BACKLOG_VALID_PRIORITIES.join('|')}`);
+    }
+
+    const desc = args.desc && args.desc !== true ? args.desc : null;
+    const feature = args.feature && args.feature !== true ? args.feature : null;
+    const epic = args.epic && args.epic !== true ? args.epic : null;
+
+    ensureDir(PATHS.backlog);
+
+    // Same id-assignment fix as bug-new (commit 97c71df): max numeric prefix
+    // among files matching /^(\d+)-bl-/, plus one — NOT a file count, so a
+    // gap in the working tree (e.g. 003 present, 001/002 missing) never
+    // recollides with a number an unmerged branch already claimed.
+    const num = backlog.nextNum(PATHS.backlog);
+    const id = `bl-${num}`;
+    const slug = slugify(title).split('-').slice(0, 6).join('-') || 'backlog';
+    const backlogPath = path.join(PATHS.backlog, `${num}-bl-${slug}.md`);
+
+    const now = new Date().toISOString();
+    const lines = [];
+    lines.push(`# ${title}`);
+    lines.push('');
+    lines.push(backlog.BACKLOG_MARKER);
+    lines.push(`id: ${id}`);
+    lines.push(`created: ${now}`);
+    lines.push(`priority: ${priority}`);
+    lines.push(`status: open`);
+    lines.push(`feature: ${feature || 'TBD'}`);
+    lines.push(`epic: ${epic || 'none'}`);
+    lines.push('');
+    lines.push('## Description');
+    lines.push('');
+    if (desc) { lines.push(desc); lines.push(''); }
+    lines.push('## Notes');
+    lines.push('');
+
+    const content = lines.join('\n');
+    try { fs.writeFileSync(backlogPath, content); } catch (e) { return err(`WRITE_FAILED: ${e.message}`); }
+
+    return ok({ id, path: backlogPath, priority });
+  },
+
+  // -----------------------------------------------------------------------
+  // backlog-list [--status open|done|dropped|all] [--epic <e>] [--feature <f>]
+  // Read-only list/sort/filter over .spec-flow/backlog/*.md, including legacy
+  // (unmarked) files (CONTEXT C-4, NFR-003) — NEVER writes, moves, or renames
+  // anything, and never even ensureDir's backlog/ (a missing dir is a normal,
+  // error-free empty result, not a reason to create the dir as a side effect
+  // of a read).
+  // Returns ok({ items, counts: { high, medium, low, unset } }).
+  // SD §5.1 FR-010..FR-016; §10.3.
+  // -----------------------------------------------------------------------
+  'backlog-list'(args) {
+    const status = args.status && args.status !== true ? args.status : 'open';
+    const epicFilter = args.epic && args.epic !== true ? args.epic : null;
+    const featureFilter = args.feature && args.feature !== true ? args.feature : null;
+
+    let items = backlog.readRecords(PATHS.backlog);
+    if (status !== 'all') items = items.filter((i) => i.status === status);
+    if (epicFilter) items = items.filter((i) => i.epic === epicFilter);
+    if (featureFilter) items = items.filter((i) => i.feature === featureFilter);
+
+    items.sort(backlog.compareItems);
+
+    // Counts are computed AFTER filtering (FR-013), not over the whole dir.
+    const counts = { high: 0, medium: 0, low: 0, unset: 0 };
+    for (const it of items) counts[it.priority]++;
+
+    return ok({ items, counts });
+  },
+
+  // -----------------------------------------------------------------------
+  // backlog-set --id <bl-NNN|legacy-slug> [--priority high|medium|low]
+  //             [--status open|done|dropped]
+  // Edit priority/status in place on a single backlog file (marker OR
+  // legacy), rewriting ONLY the matching field line — the rest of the file
+  // stays byte-for-byte (D5). A legacy file missing the field line gets it
+  // inserted right under the first `#` heading rather than being rejected.
+  // --id resolves against: the record's canonical id (bl-NNN), the file's
+  // full name minus .md (legacy files, FR-015's id), or — for numbered
+  // records — the slug portion after "<NNN>-bl-" (so `--id foo` matches
+  // 001-bl-foo.md the same way `--id bl-001` does).
+  // Returns ok({ id, priority, status }) with post-update values.
+  // SD §5.1 FR-017..FR-021; §10.5.
+  // -----------------------------------------------------------------------
+  'backlog-set'(args) {
+    const id = args.id && args.id !== true ? args.id : null;
+    if (!id) return err('MISSING_ARG: --id <bl-NNN|legacy-slug>');
+
+    const priorityArg = args.priority && args.priority !== true ? args.priority : null;
+    const statusArg = args.status && args.status !== true ? args.status : null;
+    if (!priorityArg && !statusArg) return err('MISSING_ARG: --priority or --status (at least one required)');
+
+    if (priorityArg && !backlog.BACKLOG_VALID_PRIORITIES.includes(priorityArg)) {
+      return err(`INVALID_PRIORITY: ${backlog.BACKLOG_VALID_PRIORITIES.join('|')}`);
+    }
+    if (statusArg && !backlog.BACKLOG_VALID_STATUSES.includes(statusArg)) {
+      return err(`INVALID_STATUS: ${backlog.BACKLOG_VALID_STATUSES.join('|')}`);
+    }
+
+    let files;
+    try { files = fs.readdirSync(PATHS.backlog).filter((f) => f.endsWith('.md')); }
+    catch { files = []; }
+
+    const matches = [];
+    for (const f of files) {
+      const p = path.join(PATHS.backlog, f);
+      let content;
+      try { content = fs.readFileSync(p, 'utf8'); } catch { continue; }
+      const rec = backlog.parseRecord(f, content);
+      const stem = f.replace(/\.md$/, '');
+      const numberedSlug = /^\d+-bl-(.+)$/.exec(stem);
+      const candidates = new Set([rec.id, stem]);
+      if (numberedSlug) candidates.add(numberedSlug[1]);
+      if (candidates.has(id)) matches.push({ file: f, path: p, content, rec });
+    }
+
+    if (matches.length === 0) return err(`NOT_FOUND: no backlog item matches --id ${id}`);
+    if (matches.length > 1) {
+      return err(`AMBIGUOUS_ID: ${matches.length} files match --id ${id}: ${matches.map((m) => m.file).join(', ')}`);
+    }
+
+    const { path: filePath, content, rec } = matches[0];
+    let updated = content;
+
+    const setField = (key, value) => {
+      const fieldRe = new RegExp(`^${key}:\\s*.*$`, 'm');
+      if (fieldRe.test(updated)) {
+        updated = updated.replace(fieldRe, `${key}: ${value}`);
+      } else {
+        // Legacy file with no existing field line — insert right after the
+        // first `#` heading; everything else stays untouched (D5).
+        const headingRe = /^#[^\n]*/m;
+        const m = headingRe.exec(updated);
+        if (m) {
+          const insertAt = m.index + m[0].length;
+          updated = `${updated.slice(0, insertAt)}\n${key}: ${value}${updated.slice(insertAt)}`;
+        } else {
+          updated = `${key}: ${value}\n${updated}`;
+        }
+      }
+    };
+
+    const newPriority = priorityArg || rec.priority;
+    const newStatus = statusArg || rec.status;
+    if (priorityArg) setField('priority', priorityArg);
+    if (statusArg) setField('status', statusArg);
+
+    try { fs.writeFileSync(filePath, updated); } catch (e) { return err(`WRITE_FAILED: ${e.message}`); }
+
+    return ok({ id, priority: newPriority, status: newStatus });
+  },
+
+  // -----------------------------------------------------------------------
   // status-report  [--feature <f>]
   // Pure read — no disk writes. Aggregates project status from existing files.
   // Returns ok({ project, branch, feature, sd, tasks, trace, ready, verified,
@@ -1526,6 +1705,18 @@ const commands = {
     const bugsOpen   = bugsOpenList.length;
     const changesOpen = changesOpenList.length;
 
+    // Open backlog items (FR-022, SD §10.6). `/sf:status` renders THIS Result
+    // (commands/status.md), not state-update's STATE.md text, so the "## Backlog
+    // section" the SD describes is represented here the same way bugs/changes
+    // already are: an always-present count + a top-N list, not a markdown block.
+    // Read-only — reuses backlog-list's own parse + sort (lib/backlog.cjs) so
+    // ordering matches `backlog-list` exactly.
+    const backlogOpenAll = backlog.readRecords(PATHS.backlog)
+      .filter((i) => i.status === 'open')
+      .sort(backlog.compareItems);
+    const backlogOpen = backlogOpenAll.length;
+    const backlogOpenList = backlogOpenAll.slice(0, 3).map((i) => ({ id: i.id, title: i.title }));
+
     // Checkpoint — surface if mid-task context was saved
     let checkpoint = null;
     if (featureName) {
@@ -1593,6 +1784,20 @@ const commands = {
       }
     }
 
+    // Shipped + open backlog → nextStep ends with a hint naming the top-1 item
+    // (FR-023, CONTEXT C-8: only once the feature has actually shipped — a still
+    // in-flight feature's backlog is reported above but must not distract from
+    // the ladder's current instruction). NOTE: unlike state-update, status-report's
+    // ladder above has no dedicated "shipped — nothing pending" rung of its own
+    // (that terminal text lives only in state-update's STATE.md ladder); this hint
+    // is appended onto whatever nextStep the ladder produced instead of onto a
+    // "nothing pending" string that does not exist here.
+    const shipped = featureName ? readJsonSafe(shipFileFor(featureName), null) : null;
+    if (shipped && backlogOpen > 0) {
+      const top = backlogOpenList[0];
+      nextStep = `${nextStep} Backlog: ${backlogOpen} open — top: ${top.id} "${top.title}" (\`backlog-list\`).`;
+    }
+
     // Checkpoint overrides nextStep when mid-task state was saved
     if (checkpoint && taskCounts.inProgress > 0) {
       const phasePart = checkpoint.phase ? ` [${checkpoint.phase}]` : '';
@@ -1623,7 +1828,7 @@ const commands = {
       trace: trace ? { fr: frCount, tc: tcCount, nfr: nfrCount, links } : null,
       checkpoint,
       checklist: checklistStatus,
-      shipped: featureName ? readJsonSafe(shipFileFor(featureName), null) : null,
+      shipped,
       tasks: taskCounts.total > 0 ? taskCounts : null,
       ready: ready.length > 0 ? ready : null,
       verified,
@@ -1634,6 +1839,8 @@ const commands = {
       changesOpen,
       bugsOpenList,
       changesOpenList,
+      backlogOpen,
+      backlogOpenList,
       nextStep,
     });
   },
