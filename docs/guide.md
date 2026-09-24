@@ -222,7 +222,7 @@ Two CLIs ship in `bin/`. Both are zero-network and print one JSON line per call.
 | | `task-baseline --feature [--apply]` | mark tasks done from verification evidence only, dry-run by default |
 | | `wave-plan [--max]` | ready set of pending tasks whose dependencies are done |
 | Records | `bug-new` / `bug-list` | bug records in `.spec-flow/bugs/` |
-| | `epic-new` / `epic-list` | epic records in `.spec-flow/epics/` |
+| | `epic-new --name [--subs]` / `epic-attach --epic --feature` / `epic-list` / `epic-show --epic` | epic workspaces: `.spec-flow/epics/<slug>/` with `EPIC.md` plus `srs/ decisions/ state/ assets/` for cross-phase docs; a feature joins one epic (`specs/<feature>/EPIC` points back); progress is computed from each sub-feature's tasks and ship record; single-file epics still read, never auto-migrated |
 | | `branch-ensure --kind sd\|bug\|change` | create or switch the work branch from config templates, no-op off base |
 | Tasks | `task-add`, `task-get`, `task-list`, `task-next`, `task-set-status`, `task-update` | CRUD on `.taskmaster/tasks/tasks.json` per tag |
 | | `task-use-tag`, `task-add-dep`, `task-remove-dep`, `task-add-subtask`, `task-expand` | tag switching, dependencies with cycle detection, subtasks |
