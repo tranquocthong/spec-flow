@@ -709,6 +709,211 @@ test('verify-code: declared repos (trace-repos) scope the gate above file-links 
 });
 
 // ---------------------------------------------------------------------------
+// code-rules check (code-rules-gate task 2): config.verify.rules wired into
+// verify-code, resolved per repo root, diff-scoped against config.branching.base.
+// Real temp git repos throughout (see test/code-rules.test.cjs for the same
+// convention at the engine-unit level) — this module's whole point is correct
+// `git diff` handling, which a mock would just re-assert my own assumptions about.
+// ---------------------------------------------------------------------------
+
+function crGit(args, cwd) {
+  return execFileSync('git', args, { cwd, encoding: 'utf8' });
+}
+/** git init a repo on branch `main` (so a same-cwd init-project auto-detects base:"main"). */
+function crInitRepo(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  crGit(['init', '-q'], dir);
+  crGit(['checkout', '-q', '-b', 'main'], dir);
+  crGit(['config', 'user.email', 't@t.co'], dir);
+  crGit(['config', 'user.name', 't'], dir);
+}
+function crWriteFile(dir, rel, content) {
+  const abs = path.join(dir, rel);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, content);
+}
+function crCommitAll(dir, msg) {
+  crGit(['add', '-A'], dir);
+  crGit(['commit', '-q', '-m', msg], dir);
+}
+
+test('verify-code: code-rules skipped when config.verify.rules is empty (FR-004, TC-007)', () => {
+  const dir = tmpProject();
+  assert.equal(run(['init-project', '--stack', 'java-spring'], dir).ok, true);
+  const r = run(['verify-code'], dir);
+  assert.equal(r.ok, true);
+  const cr = r.data.checks.find((c) => c.name === 'code-rules');
+  assert.equal(cr.status, 'skipped');
+  assert.match(cr.detail, /config\.verify\.rules/);
+  // Other checks still run normally — code-rules is additive, not a gate on them.
+  const fp = r.data.checks.find((c) => c.name === 'forbidden-patterns');
+  assert.ok(fp && fp.status !== undefined, 'forbidden-patterns unaffected by the absence of rules[]');
+});
+
+test('verify-code: code-rules fails on a new diff violation and reports preexisting count (FR-002, FR-004, TC-001)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sf-cr-fail-'));
+  crInitRepo(dir);
+  const baseLines = [
+    'class FooController {',
+    '  ResponseEntity<String> a() { return null; }',
+    '  ResponseEntity<String> b() { return null; }',
+    '  ResponseEntity<String> c() { return null; }',
+    '  ResponseEntity<String> d() { return null; }',
+    '  ResponseEntity<String> e() { return null; }',
+    '}',
+  ];
+  crWriteFile(dir, 'src/FooController.java', baseLines.join('\n') + '\n');
+  crCommitAll(dir, 'baseline');
+  assert.equal(run(['init-project', '--stack', 'java-spring'], dir).ok, true, 'init-project on main → branching.base "main"');
+  crGit(['checkout', '-q', '-b', 'feature'], dir);
+  const updated = baseLines.slice(0, -1)
+    .concat(['  ResponseEntity<String> f() { return null; }'], baseLines.slice(-1));
+  crWriteFile(dir, 'src/FooController.java', updated.join('\n') + '\n');
+
+  const cfgPath = path.join(dir, '.spec-flow', 'config.json');
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  cfg.verify.testCommand = null; cfg.verify.coverageThreshold = null; cfg.verify.secretScan = false;
+  cfg.verify.rules = [{
+    id: 'no-response-entity',
+    message: 'Use @ResponseStatus, not ResponseEntity.',
+    forbid: 'ResponseEntity<',
+    glob: '**/*Controller.java',
+  }];
+  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+
+  const r = run(['verify-code'], dir);
+  assert.equal(r.ok, true);
+  const cr = r.data.checks.find((c) => c.name === 'code-rules');
+  assert.equal(cr.status, 'fail');
+  assert.match(cr.detail, /1 violation/);
+  assert.match(cr.detail, /src\/FooController\.java:7 \[no-response-entity\] Use @ResponseStatus, not ResponseEntity\./);
+  assert.match(cr.detail, /preexisting: 5/, 'the 5 untouched preexisting hits are reported, not blocking');
+  assert.match(cr.fix, /config\.verify\.rules/);
+  assert.equal(r.data.gate, 'fail', 'a code-rules violation fails the overall gate');
+});
+
+test('verify-code: code-rules is "ok" when the task never touches the violating file — preexisting count still shown (FR-002, TC-002)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sf-cr-ok-'));
+  crInitRepo(dir);
+  const baseLines = [
+    'class FooController {',
+    '  ResponseEntity<String> a() { return null; }',
+    '  ResponseEntity<String> b() { return null; }',
+    '  ResponseEntity<String> c() { return null; }',
+    '  ResponseEntity<String> d() { return null; }',
+    '  ResponseEntity<String> e() { return null; }',
+    '}',
+  ];
+  crWriteFile(dir, 'src/FooController.java', baseLines.join('\n') + '\n');
+  crCommitAll(dir, 'baseline');
+  assert.equal(run(['init-project', '--stack', 'java-spring'], dir).ok, true);
+  crGit(['checkout', '-q', '-b', 'feature'], dir);
+  // Task touches an unrelated file only — FooController.java is untouched.
+  crWriteFile(dir, 'src/Other.java', 'class Other {}\n');
+
+  const cfgPath = path.join(dir, '.spec-flow', 'config.json');
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  cfg.verify.testCommand = null; cfg.verify.coverageThreshold = null; cfg.verify.secretScan = false;
+  cfg.verify.rules = [{
+    id: 'no-response-entity',
+    message: 'Use @ResponseStatus, not ResponseEntity.',
+    forbid: 'ResponseEntity<',
+    glob: '**/*Controller.java',
+  }];
+  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+
+  const r = run(['verify-code'], dir);
+  assert.equal(r.ok, true);
+  const cr = r.data.checks.find((c) => c.name === 'code-rules');
+  assert.equal(cr.status, 'ok', 'no in-scope violation — the 5 hits are all preexisting, outside the diff');
+  assert.match(cr.detail, /preexisting: 5/);
+  assert.equal(r.data.gate, 'pass');
+});
+
+test('verify-code: --task never narrows the code-rules diff scope (FR-004)', () => {
+  // --task/--files scopes the "tests" check only; code-rules always evaluates the
+  // FULL diff for the root regardless of which files this task's file-links name.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sf-cr-task-'));
+  crInitRepo(dir);
+  crWriteFile(dir, 'src/FooController.java', 'class FooController {\n}\n');
+  crCommitAll(dir, 'baseline');
+  assert.equal(run(['init-project', '--stack', 'java-spring'], dir).ok, true);
+  crGit(['checkout', '-q', '-b', 'feature'], dir);
+  crWriteFile(dir, 'src/FooController.java', 'class FooController {\n  ResponseEntity<String> a(){ return null; }\n}\n');
+
+  const cfgPath = path.join(dir, '.spec-flow', 'config.json');
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  cfg.verify.testCommand = null; cfg.verify.coverageThreshold = null; cfg.verify.secretScan = false;
+  cfg.verify.rules = [{ id: 'no-response-entity', message: 'no ResponseEntity', forbid: 'ResponseEntity<' }];
+  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+  // Declare a task whose recorded file-links point at a completely different file —
+  // if code-rules were (wrongly) narrowed to file-links, it would see nothing.
+  run(['trace-link', '--task', '1', '--feature', 'demo', '--files', 'src/Unrelated.java'], dir);
+
+  const r = run(['verify-code', '--feature', 'demo', '--task', '1'], dir);
+  assert.equal(r.ok, true);
+  const cr = r.data.checks.find((c) => c.name === 'code-rules');
+  assert.equal(cr.status, 'fail', 'code-rules still sees the FooController.java violation despite --task scoping to another file');
+});
+
+test('verify-code: forbidden-patterns output is byte-identical whether or not config.verify.rules is configured (FR-005, TC-008)', () => {
+  const dir = tmpProject();
+  assert.equal(run(['init-project', '--stack', 'node'], dir).ok, true);
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'src', 'a.js'), 'console.log("x");\n');
+  const cfgPath = path.join(dir, '.spec-flow', 'config.json');
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  cfg.verify.testCommand = null; cfg.verify.coverageThreshold = null; cfg.verify.secretScan = false;
+  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+
+  const before = run(['verify-code'], dir);
+  const fpBefore = before.data.checks.find((c) => c.name === 'forbidden-patterns');
+  assert.equal(fpBefore.status, 'fail', 'baseline: console.log( is a configured forbidden pattern');
+
+  cfg.verify.rules = [{ id: 'dummy', message: 'no-op', forbid: 'THIS_NEVER_MATCHES_ANYTHING', scope: 'all' }];
+  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+  const after = run(['verify-code'], dir);
+  const fpAfter = after.data.checks.find((c) => c.name === 'forbidden-patterns');
+
+  assert.deepEqual(fpAfter, fpBefore, 'adding config.verify.rules does not change the forbidden-patterns check at all');
+});
+
+test('multi-repo verify-code: code-rules resolves per repo root, diff computed in each repo\'s own git (FR-006, TC-029)', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sf-cr-multi-'));
+  const hub = path.join(root, 'hub');
+  fs.mkdirSync(hub, { recursive: true });
+  const svcA = path.join(root, 'svc-a');
+  const svcB = path.join(root, 'svc-b');
+  crInitRepo(svcA);
+  crInitRepo(svcB);
+  crWriteFile(svcA, 'src/AController.java', 'class AController {\n}\n');
+  crWriteFile(svcB, 'src/BController.java', 'class BController {\n}\n');
+  crCommitAll(svcA, 'baseline');
+  crCommitAll(svcB, 'baseline');
+  assert.equal(run(['init-project', '--stack', 'java-spring', '--repos', 'svc-a=../svc-a,svc-b=../svc-b'], hub).ok, true);
+  crGit(['checkout', '-q', '-b', 'feature'], svcA);
+  crGit(['checkout', '-q', '-b', 'feature'], svcB);
+  // Only svc-a gets a new violation; svc-b stays clean and has no rules of its own.
+  crWriteFile(svcA, 'src/AController.java', 'class AController {\n  ResponseEntity<String> a(){ return null; }\n}\n');
+
+  const cfgPath = path.join(hub, '.spec-flow', 'config.json');
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  cfg.verify.testCommand = null; cfg.verify.coverageThreshold = null; cfg.verify.coverageCommand = null; cfg.verify.secretScan = false;
+  cfg.repos['svc-a'] = { path: '../svc-a', verify: { rules: [{ id: 'no-response-entity', message: 'no ResponseEntity', forbid: 'ResponseEntity<' }] } };
+  cfg.repos['svc-b'] = { path: '../svc-b', verify: { rules: [] } };
+  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+
+  const r = run(['verify-code'], hub);
+  assert.equal(r.ok, true);
+  const aCr = r.data.checks.find((c) => c.name === '[svc-a] code-rules');
+  const bCr = r.data.checks.find((c) => c.name === '[svc-b] code-rules');
+  assert.equal(aCr && aCr.status, 'fail', 'svc-a rule catches its own new violation, using svc-a\'s own git diff');
+  assert.match(aCr.detail, /AController\.java/);
+  assert.equal(bCr && bCr.status, 'skipped', 'svc-b has no rules configured for itself — svc-a\'s rule does not leak over');
+  assert.equal(r.data.gate, 'fail');
+});
+
+// ---------------------------------------------------------------------------
 // TDD RED-phase gate: verify-code --expect fail (v0.5.2)
 // ---------------------------------------------------------------------------
 
@@ -718,7 +923,12 @@ test('verify-code --expect fail: failing test → gate "red-confirmed"', () => {
   // Override verify block: testCommand always exits non-zero (simulates a failing test)
   const cfgPath = path.join(dir, '.spec-flow', 'config.json');
   const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-  cfg.verify = { testCommand: 'exit 1', coverageThreshold: null, forbiddenPatterns: [], secretScan: false };
+  cfg.verify = {
+    testCommand: 'exit 1', coverageThreshold: null, forbiddenPatterns: [], secretScan: false,
+    // Configured (not empty) — proves code-rules is skipped for RED-phase, not merely
+    // because there was nothing to evaluate (TC-011).
+    rules: [{ id: 'no-response-entity', message: 'no ResponseEntity', forbid: 'ResponseEntity<' }],
+  };
   fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
   const r = run(['verify-code', '--expect', 'fail'], dir);
   assert.equal(r.ok, true, 'never throws');
@@ -726,8 +936,8 @@ test('verify-code --expect fail: failing test → gate "red-confirmed"', () => {
   const testCheck = r.data.checks.find(c => c.name === 'tests');
   assert.equal(testCheck.status, 'ok', 'test check is ok when RED confirmed');
   assert.match(testCheck.detail, /RED confirmed/);
-  // coverage / forbidden-patterns / secret-scan must be skipped in RED-phase
-  ['coverage', 'forbidden-patterns', 'secret-scan'].forEach(n => {
+  // coverage / forbidden-patterns / code-rules / secret-scan must be skipped in RED-phase
+  ['coverage', 'forbidden-patterns', 'code-rules', 'secret-scan'].forEach(n => {
     const c = r.data.checks.find(ch => ch.name === n);
     assert.equal(c && c.status, 'skipped', `${n} skipped in RED-phase`);
   });
