@@ -1159,13 +1159,21 @@ const commands = {
 
     ensureDir(PATHS.bugs);
 
-    // Assign id bug-NNN by counting existing files.
+    // Assign id bug-NNN from the highest existing numeric prefix + 1 (not a file count —
+    // a count collides whenever the working tree is missing a file an unmerged branch
+    // already claimed, e.g. bug-004 created on an unmerged MR while this branch still
+    // only has 3 files locally).
     // Filename is NNN-bug-<slug>.md — number-first so files sort in creation order,
     // plus a short slug from --desc so the file is recognisable at a glance.
     // The internal `id` stays bug-NNN (short, stable handle for traceability refs).
-    let existingCount = 0;
-    try { existingCount = fs.readdirSync(PATHS.bugs).filter(f => f.endsWith('.md')).length; } catch {}
-    const num = String(existingCount + 1).padStart(3, '0');
+    let maxNum = 0;
+    try {
+      for (const f of fs.readdirSync(PATHS.bugs)) {
+        const m = /^(\d+)-bug-/.exec(f);
+        if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
+      }
+    } catch {}
+    const num = String(maxNum + 1).padStart(3, '0');
     const id = `bug-${num}`;
     const shortSlug = slugify(desc).split('-').slice(0, 6).join('-') || 'bug';
     const bugPath = path.join(PATHS.bugs, `${num}-bug-${shortSlug}.md`);

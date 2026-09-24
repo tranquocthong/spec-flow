@@ -104,6 +104,22 @@ test('bug-new then bug-list reflects the new record', () => {
   assert.match(blob, /login 500 on empty body/, 'new bug appears in bug-list');
 });
 
+test('bug-new numbers from the max existing id, not a file count (no collision when a file is missing)', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  const bugsDir = path.join(dir, '.spec-flow', 'bugs');
+  fs.mkdirSync(bugsDir, { recursive: true });
+  // Simulate a branch that only sees 3 local files while bug-004 already
+  // exists elsewhere (e.g. created on an unmerged MR) — count-based numbering
+  // would recompute 004 here and collide; max-based numbering must skip to 005.
+  fs.writeFileSync(path.join(bugsDir, '001-bug-a.md'), 'id: bug-001\n');
+  fs.writeFileSync(path.join(bugsDir, '002-bug-b.md'), 'id: bug-002\n');
+  fs.writeFileSync(path.join(bugsDir, '004-bug-d.md'), 'id: bug-004\n');
+  const created = run(['bug-new', '--desc', 'gap regression'], dir);
+  assert.equal(created.ok, true, 'bug-new ok');
+  assert.equal(created.data.id, 'bug-005', 'next id skips past the gap instead of recolliding with bug-004');
+});
+
 test('epic-new then epic-list ok', () => {
   const dir = tmpProject();
   initProject(dir);
