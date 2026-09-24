@@ -13,6 +13,7 @@ You implement exactly ONE task. The SD section is the contract.
 - `CONTEXT.md` (locked decisions).
 - SD section(s) this task traces to (paths from the orchestrator).
 - Stack context: read `.spec-flow/config.json` → `stack`, and `.spec-flow/project-author.md` if present (stack conventions, known pitfalls).
+- **`## Code Rules`:** when `project-author.md` has a `## Code Rules` section with ≥1 bullet, the orchestrator pastes those bullets verbatim into this spawn prompt — they are **binding**, not "read if present". Still read the rest of `project-author.md` as background context.
 - **Target repo (multi-repo):** read `config.repos`. If set, the planning `.spec-flow/` is in the hub repo but this task's code lives in a sibling service repo. The SD labels each component/FR by service (e.g. "(auth-svc)") — `cd` into `config.repos[<service>]` to read, edit, and build/test the code there. Absent → all code is in cwd.
 
 ## Procedure
@@ -35,8 +36,20 @@ You implement exactly ONE task. The SD section is the contract.
 
    For a **chore task** (no FR, infra/migration/scaffolding): skip the RED phase — there is no behavior to assert on. Note "chore — RED phase skipped" in your return summary.
 
-4. **TDD — GREEN phase (implement to make the test pass).** Write the minimum production code to satisfy the test and the SD FR. Match surrounding code style.
+4. **TDD — GREEN phase (implement to make the test pass).** Write the minimum production code to satisfy the test and the SD FR. Match surrounding code style. Then run:
+   ```
+   node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs verify-code --feature <feature> --files "<changed file(s)>"
+   ```
+   This includes a `code-rules` check derived from `config.verify.rules` — a `code-rules: fail` here is a real violation of a machine-checkable project rule; fix it before returning, same as any other GREEN-phase failure.
 5. **Self-check diff against SD §5.1 FR / §13.2 TC.** Confirm explicitly: "FR-XXX satisfied: \<evidence\>" for each FR this task covers. If any criterion is unmet, keep working — do not return until all are satisfied or you have a specific blocker to report.
+
+   **`## Code Rules` compliance table.** If the orchestrator passed you `## Code Rules` bullets (Inputs, above), your return summary MUST also include:
+   ```
+   | Rule | Status | Notes |
+   | --- | --- | --- |
+   | <bullet text> | pass / n/a / violated | <evidence, or one-line reason for n/a> |
+   ```
+   One row per bullet. `violated` means your diff breaks that rule — fix it before returning; never return with a `violated` row still open. `n/a` requires a one-line reason (rule does not apply to this task's files/change). No `## Code Rules` bullets were passed → omit the table entirely, do not fabricate one.
 6. **Record touched files** immediately after editing:
    ```
    node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs trace-link \

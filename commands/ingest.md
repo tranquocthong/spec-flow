@@ -1,6 +1,6 @@
 ---
 description: Ingest an approved SRS into a Solution Design (SD) draft + CONTEXT.md + tasks seed + traceability. Replaces manual "convert SRS to SD" prompting. No file / just an idea? Bare invocation interviews you and writes the SRS first (AI-elicited input beats hand-typed prose).
-argument-hint: "[<path/to/srs.md> | --idea \"<seed>\"] [--type api|internal|hybrid|auto]"
+argument-hint: "[<path/to/srs.md> | --idea \"<seed>\"] [--type api|internal|hybrid|auto] [--epic <slug>]"
 allowed-tools: Read, Write, Edit, Bash, Agent
 ---
 
@@ -49,6 +49,18 @@ With a file path given, skip Mode 0 and go straight to the Steps.
    node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs srs-snapshot --srs <path>
    ```
    Writes `.spec-flow/snapshots/<feature>-001.md`. Required before any `srs-diff` call.
+
+   **If `--epic <slug>` was passed:** after the snapshot, register this feature with the epic. First create (or confirm) the epic workspace:
+   ```bash
+   node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs epic-new --name <slug>
+   ```
+   `epic-new` is idempotent — if the epic already exists it returns `alreadyExists: true` and exits 0; proceed regardless. Then attach this feature to the epic:
+   ```bash
+   node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs epic-attach --epic <slug> --feature <feature>
+   ```
+   `epic-attach` is also idempotent — if the feature is already attached it returns `alreadyAttached: true` and exits 0. When `--epic` is absent, skip these calls entirely and continue; behavior is unchanged from the current flow.
+
+   The sequence here matches §10.7 of the SD: srs-snapshot → epic-new (idempotent) → epic-attach → continue with sd-skeleton.
 
    Then create the work branch (per `config.json → branching`):
    ```

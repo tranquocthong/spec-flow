@@ -159,6 +159,25 @@ Everything policy-shaped lives as data in `.spec-flow/config.json`, seeded by `/
 
 **Verification gate.** `verify.testCommand`, `coverageThreshold`, `forbiddenPatterns`, `secretScan`, per repo when a feature spans several repositories (`config.repos`).
 
+**Code rules.** Team coding rules are enforced in two layers.
+
+- *Machine-checkable* rules go in `verify.rules`. `verify-code` runs them on every task and fails on a violation **in the code this branch added or changed** (against the merge-base with `branching.base`, uncommitted and untracked files included). Violations already in old code do not fail; they are counted as `preexisting` so the debt stays visible. That is what makes a rule safe to add to a project that already breaks it. Each rule has an `id`, a `message`, an optional `glob`/`exclude`, and either `forbid` (a line regex) or `when` + `require` (a file that matches `when` must also match `require`). `scope: "all"` checks the whole tree instead, once a team has cleaned up. A malformed rule is skipped with a warning and never fails the gate; `/sf:doctor` lists what is wrong with it.
+
+  ```json
+  "rules": [
+    { "id": "no-response-entity", "glob": "**/*Controller.java", "forbid": "ResponseEntity<",
+      "message": "Use @ResponseStatus and return the body" },
+    { "id": "scheduled-needs-shedlock", "glob": "**/*.java", "when": "@Scheduled", "require": "@SchedulerLock",
+      "message": "Multi-pod: every @Scheduled job needs @SchedulerLock" },
+    { "id": "timestamptz", "glob": "**/migration/*.sql", "forbid": "\\btimestamp\\b(?!\\s+with\\s+time\\s+zone)",
+      "message": "Use timestamptz" }
+  ]
+  ```
+
+- *Judgment* rules go as bullets under `## Code Rules` in `project-author.md`. `/sf:phase` pastes them verbatim into every executor prompt, and the executor must return one `pass | n/a | violated` row per bullet; a missing table or an open `violated` row is sent back. The pre-ship reviewer answers each bullet as a checklist item, and any violation is a `project-rule` finding that **blocks the ship** (severity at least `medium`), with `review-accept` as the explicit override.
+
+`forbiddenPatterns` keeps its old behaviour (whole `scanPath`, every task) for existing projects; new rules belong in `verify.rules`.
+
 **Language.** `language: "vi"` makes the agent reply and author SD prose in Vietnamese. Code, identifiers, commit messages, section headings and FR/TC ids stay English. SRS harvesting understands English and Vietnamese keyword packs.
 
 **Phase.** `phase.confirmTasks` asks before seeding tasks. `phase.taskNotes` turns on per-task AI progress notes (off by default, they cost one AI call per task).
@@ -222,7 +241,8 @@ Two CLIs ship in `bin/`. Both are zero-network and print one JSON line per call.
 | | `task-baseline --feature [--apply]` | mark tasks done from verification evidence only, dry-run by default |
 | | `wave-plan [--max]` | ready set of pending tasks whose dependencies are done |
 | Records | `bug-new` / `bug-list` | bug records in `.spec-flow/bugs/` |
-| | `epic-new` / `epic-list` | epic records in `.spec-flow/epics/` |
+| | `backlog-new --title --priority high\|medium\|low` / `backlog-list [--status] [--epic] [--feature]` / `backlog-set --id [--priority] [--status]` | deferred-work records in `.spec-flow/backlog/`, listed in priority order; priority is required on create; hand-written files without the record marker are still listed (`legacy`, priority `unset`) and never rewritten by a list |
+| | `epic-new --name [--subs]` / `epic-attach --epic --feature` / `epic-list` / `epic-show --epic` | epic workspaces: `.spec-flow/epics/<slug>/` with `EPIC.md` plus `srs/ decisions/ state/ assets/` for cross-phase docs; a feature joins one epic (`specs/<feature>/EPIC` points back); progress is computed from each sub-feature's tasks and ship record; single-file epics still read, never auto-migrated |
 | | `branch-ensure --kind sd\|bug\|change` | create or switch the work branch from config templates, no-op off base |
 | Tasks | `task-add`, `task-get`, `task-list`, `task-next`, `task-set-status`, `task-update` | CRUD on `.taskmaster/tasks/tasks.json` per tag |
 | | `task-use-tag`, `task-add-dep`, `task-remove-dep`, `task-add-subtask`, `task-expand` | tag switching, dependencies with cycle detection, subtasks |

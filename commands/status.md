@@ -29,11 +29,13 @@ Present a compact status block:
 | Ready now | If `data.ready`: list each task as `#{id} "{title}"` — else `(none)` |
 | Verified | `passed` if `data.verified === true`; `not yet` if `false`; `(no run yet)` if null. If `data.verifiedGaps` is non-empty, append ` · {N} live gap(s)` |
 | Open bugs/changes | `{data.bugsOpen}` bugs · `{data.changesOpen}` changes |
+| Open backlog | `{data.backlogOpen}` open |
 
 If `data.bugsOpenList` or `data.changesOpenList` is non-empty, list each open item under the table so the user sees *what* is open (not just a count):
 
 **Open bugs** — for each in `data.bugsOpenList`: `- {id} — {desc}`
 **Open changes** — for each in `data.changesOpenList`: `- {id} — {desc}`
+**Open backlog (top 3, priority order)** — for each in `data.backlogOpenList`: `- {id} — {title}`
 
 If `data.verifiedGaps` is non-empty, list them so a verified-adhoc ship's un-verified-live items are visible (not forgotten at merge):
 **Live gaps (not verified live)** — for each in `data.verifiedGaps`: `- {gap}`
