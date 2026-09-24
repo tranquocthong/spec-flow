@@ -2,6 +2,16 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [Unreleased]
+
+### Added
+
+- **Coding rules in `project-author.md` are now enforced, not suggested.** A team's rules reached the code only as a paragraph the executor was told to "read if present". Nothing checked them, and the pre-ship reviewer was even told "House style is not a finding", so violations reached the team's own reviewers and the PR was rejected there. Four gaps, four fixes:
+  - **`verify.rules`, a diff-scoped rule gate.** `forbiddenPatterns` scans the whole tree on every task, so adding a rule to a project whose old code already breaks it failed every task, and in practice nobody added one. `verify-code` now has a `code-rules` check that fails only on lines this branch added or changed (merge-base with `branching.base`, uncommitted and untracked included) and reports the old violations as a `preexisting` count. Rules can be scoped by `glob`, and besides `forbid` they can say "a file with A must also have B" (`when` + `require`), for rules like "`@Scheduled` needs `@SchedulerLock`". A broken rule is skipped with a warning and never fails the gate. `forbiddenPatterns` is unchanged.
+  - **The executor answers every rule.** `/sf:phase` pastes the `## Code Rules` bullets verbatim into each executor prompt, and the executor must return a `pass | n/a | violated` row per bullet. A missing table or an open `violated` row is sent back, like missing TDD evidence.
+  - **The reviewer checks every rule, and a violation blocks.** The "house style is not a finding" instruction is gone. Each `## Code Rules` bullet is a checklist item, and a violation is a `project-rule` finding: `review-collect` raises it to at least `medium` and treats it as blocking, with `review-accept` as the override. Taste outside `## Code Rules` stays `low`.
+  - `/sf:doctor` validates `verify.rules`, and new projects get an empty `## Code Rules` section in `project-author.md` (existing files are not touched).
+
 ## [0.12.1] — 2026-09-24
 
 ### Fixed
