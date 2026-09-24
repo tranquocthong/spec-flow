@@ -390,6 +390,87 @@ test('init-project: a pre-existing phase block keeps its own confirmTasks choice
   });
 });
 
+// ---------------------------------------------------------------------------
+// doctor: backlog-priority (FR-025, SD §10.7, TC-019) — WARN-only check
+// listing legacy backlog files (no marker) and marker records left with
+// priority 'unset', each with the backlog-set command to fix it. Never FAIL,
+// and no noise when there is nothing to flag.
+// ---------------------------------------------------------------------------
+
+const MARKER = '<!-- spec-flow backlog record -->';
+function backlogRecord({ id = 'bl-001', title = 'Test item', priority = 'medium' } = {}) {
+  return [
+    `# ${title}`,
+    '',
+    MARKER,
+    `id: ${id}`,
+    'created: 2026-09-24T00:00:00.000Z',
+    `priority: ${priority}`,
+    'status: open',
+    '',
+    '## Description',
+    '',
+  ].join('\n');
+}
+
+const backlogPriorityChecks = () => maintenance.doctor({}).data.checks.filter(c => c.name === 'backlog-priority');
+
+test('doctor: backlog-priority is ok with no noise when .spec-flow/backlog/ does not exist', () => {
+  inTmp(() => {
+    maintenance['init-project']({ stack: 'node' });
+    const checks = backlogPriorityChecks();
+    assert.equal(checks.length, 1);
+    assert.equal(checks[0].status, 'ok');
+    assert.equal(checks[0].fix, null);
+  });
+});
+
+test('doctor: backlog-priority is ok with no noise when the backlog dir has nothing to flag', () => {
+  inTmp(() => {
+    maintenance['init-project']({ stack: 'node' });
+    fs.mkdirSync('.spec-flow/backlog', { recursive: true });
+    fs.writeFileSync('.spec-flow/backlog/001-bl-foo.md', backlogRecord({ id: 'bl-001', priority: 'high' }));
+    const checks = backlogPriorityChecks();
+    assert.equal(checks.length, 1);
+    assert.equal(checks[0].status, 'ok');
+  });
+});
+
+test('doctor: backlog-priority WARNs on a legacy file and a priority-less record, each with a backlog-set fix hint (TC-019)', () => {
+  inTmp(() => {
+    maintenance['init-project']({ stack: 'node' });
+    fs.mkdirSync('.spec-flow/backlog', { recursive: true });
+    // Legacy: no marker at all.
+    fs.writeFileSync('.spec-flow/backlog/legacy-note.md', '# Some old note\n\nno marker here\n');
+    // Marker present, but priority is missing/invalid -> parses to 'unset'.
+    fs.writeFileSync('.spec-flow/backlog/002-bl-bar.md', backlogRecord({ id: 'bl-002', priority: 'nope' }));
+    // A well-formed record must NOT be flagged.
+    fs.writeFileSync('.spec-flow/backlog/003-bl-baz.md', backlogRecord({ id: 'bl-003', priority: 'low' }));
+
+    const checks = backlogPriorityChecks();
+    assert.equal(checks.length, 2, 'exactly the legacy file and the priority-less record are flagged');
+    assert.ok(checks.every(c => c.status === 'warn'), 'never FAIL, only WARN');
+    assert.ok(checks.every(c => /backlog-set --id/.test(c.fix)), 'each flagged item carries a backlog-set fix hint');
+
+    const details = checks.map(c => c.detail).join(' | ');
+    assert.match(details, /legacy-note\.md/);
+    assert.match(details, /bl-002/);
+  });
+});
+
+test('doctor: backlog-priority does not flag a legacy file once backlog-set gave it a priority (the fix clears the warning)', () => {
+  inTmp(() => {
+    maintenance['init-project']({ stack: 'node' });
+    fs.mkdirSync('.spec-flow/backlog', { recursive: true });
+    // What `backlog-set --priority medium` leaves on a legacy file: a priority line under the heading, still no marker.
+    fs.writeFileSync('.spec-flow/backlog/legacy-note.md', '# Some old note\npriority: medium\n\nno marker here\n');
+
+    const checks = backlogPriorityChecks();
+    assert.equal(checks.length, 1);
+    assert.equal(checks[0].status, 'ok', 'a legacy file with a valid priority lists correctly, so there is nothing to fix');
+  });
+});
+
 test('doctor verify-integrity: a TODO inside a YAML comment is not an unfilled test', () => {
   inTmp(() => {
     maintenance['init-project']({ stack: 'node' });

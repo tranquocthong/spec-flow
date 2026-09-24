@@ -2,6 +2,14 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [Unreleased]
+
+### Added
+
+- **Backlog is now a record type, not a folder of free-form notes.** `.spec-flow/backlog/` was a convention nothing read: no order, no status, and `/sf:status` reported "nothing pending" while deferred work sat there. `backlog-new --title --priority high|medium|low [--desc] [--feature] [--epic]` writes `NNN-bl-<slug>.md` (id `bl-NNN`, numbered from the highest existing prefix, like `bug-new`). Priority is required and has no silent default, since a defaulted priority carries no information. `backlog-list` sorts high > medium > low > unset, then oldest first, and filters by `--status` (default `open`), `--epic`, `--feature`. `backlog-set` changes priority or status (`open|done|dropped`) in place, leaving the rest of the file byte-for-byte.
+  - Existing hand-written backlog files keep working: without the record marker they are listed as `legacy` with priority `unset`, and a list never rewrites them. `/sf:doctor` warns about them (and about records with no priority) with the `backlog-set` command that fixes each.
+  - After a ship, the "nothing pending" next step now names the top open backlog item, and `/sf:status` shows the open count and the top three. With no open backlog both outputs are unchanged.
+
 ## [0.12.1] — 2026-09-24
 
 ### Fixed
