@@ -124,6 +124,30 @@ test('init-project: no build markers → unknown (empty verify, no false gate)',
   });
 });
 
+test('init-project: fresh project-author.md has an empty ## Code Rules section with guidance (TC-022, FR-012)', () => {
+  inTmp(() => {
+    const r = maintenance['init-project']({ stack: 'node' });
+    assert.ok(r.data.created.includes('.spec-flow/project-author.md'));
+    const txt = fs.readFileSync('.spec-flow/project-author.md', 'utf8');
+    assert.match(txt, /^## Code Rules$/m, 'heading must be exactly "## Code Rules" (D5 — parsed by executor/reviewer as an anchor)');
+    // Guidance distinguishes machine-checkable (config.verify.rules) from judgment rules (bullets here).
+    assert.match(txt, /config\.verify\.rules/);
+    assert.match(txt, /pass|n\/a|violated/i);
+  });
+});
+
+test('init-project: an existing project-author.md is never rewritten, even without ## Code Rules', () => {
+  inTmp(() => {
+    fs.mkdirSync('.spec-flow', { recursive: true });
+    const legacy = '# Project SD-authoring overrides\n\nNo Code Rules section here.\n';
+    fs.writeFileSync('.spec-flow/project-author.md', legacy);
+    const r = maintenance['init-project']({ stack: 'node' });
+    assert.ok(r.data.alreadyExisted.includes('.spec-flow/project-author.md'));
+    const txt = fs.readFileSync('.spec-flow/project-author.md', 'utf8');
+    assert.equal(txt, legacy, 'init-project must not touch a pre-existing project-author.md');
+  });
+});
+
 test('learn: requires --note', () => {
   inTmp(() => {
     const r = maintenance.learn({});
@@ -388,6 +412,112 @@ test('init-project: a pre-existing phase block keeps its own confirmTasks choice
     // here is optional — but it must never be back-filled as true.
     assert.notEqual(cfg.phase.taskNotes, true);
   });
+});
+
+// -----------------------------------------------------------------------
+// doctor / code-rules-config (FR-011) — validates config.verify.rules (and
+// config.repos[*].verify.rules) by reusing lib/code-rules.cjs validateRules,
+// so a malformed rule is caught here BEFORE a real verify-code run silently
+// skips it. Never fails the gate (D4) — every outcome is 'ok' or 'warn'.
+// -----------------------------------------------------------------------
+const codeRulesChecks = (cfgPatch) => {
+  return inTmp(() => {
+    maintenance['init-project']({ stack: 'node' });
+    const cfgPath = '.spec-flow/config.json';
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    Object.assign(cfg, cfgPatch);
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+    return maintenance.doctor({}).data.checks.filter(c => c.name === 'code-rules-config');
+  });
+};
+
+test('doctor code-rules-config: ok with a hint when no rules are configured (TC-like empty)', () => {
+  const checks = codeRulesChecks({});
+  assert.equal(checks.length, 1);
+  assert.equal(checks[0].status, 'ok');
+  assert.match(checks[0].detail, /no.*rules configured/i);
+});
+
+test('doctor code-rules-config: ok with a hint when rules is an empty array', () => {
+  const checks = codeRulesChecks({ verify: { rules: [] } });
+  assert.equal(checks.length, 1);
+  assert.equal(checks[0].status, 'ok');
+  assert.match(checks[0].detail, /no.*rules configured/i);
+});
+
+test('doctor code-rules-config: warns when a rule is missing id/message (TC-016)', () => {
+  const checks = codeRulesChecks({ verify: { rules: [{ forbid: 'foo' }] } });
+  assert.ok(checks.some(c => c.status === 'warn'), 'must warn on a rule missing id/message');
+  assert.ok(checks.every(c => c.status !== 'fail'), 'must never fail the gate');
+});
+
+test('doctor code-rules-config: warns on duplicate id (TC-017)', () => {
+  const checks = codeRulesChecks({
+    verify: {
+      rules: [
+        { id: 'dup', message: 'm1', forbid: 'foo' },
+        { id: 'dup', message: 'm2', forbid: 'bar' },
+      ],
+    },
+  });
+  assert.ok(checks.some(c => c.status === 'warn' && /dup/.test(c.detail)), 'must warn identifying the duplicate id');
+});
+
+test('doctor code-rules-config: warns when forbid and when are both set (TC-018)', () => {
+  const checks = codeRulesChecks({
+    verify: { rules: [{ id: 'both', message: 'm', forbid: 'foo', when: 'bar', require: 'baz' }] },
+  });
+  assert.ok(checks.some(c => c.status === 'warn' && /both/.test(c.detail)));
+});
+
+test('doctor code-rules-config: warns when when has no require (TC-019)', () => {
+  const checks = codeRulesChecks({
+    verify: { rules: [{ id: 'no-require', message: 'm', when: 'foo' }] },
+  });
+  assert.ok(checks.some(c => c.status === 'warn' && /no-require/.test(c.detail)));
+});
+
+test('doctor code-rules-config: warns on a regex that fails to compile (TC-020)', () => {
+  const checks = codeRulesChecks({
+    verify: { rules: [{ id: 'bad-regex', message: 'm', forbid: '[unclosed' }] },
+  });
+  assert.ok(checks.some(c => c.status === 'warn' && /bad-regex/.test(c.detail)));
+});
+
+test('doctor code-rules-config: warns on an unsupported scope value (TC-021)', () => {
+  const checks = codeRulesChecks({
+    verify: { rules: [{ id: 'bad-scope', message: 'm', forbid: 'foo', scope: 'unknown' }] },
+  });
+  assert.ok(checks.some(c => c.status === 'warn' && /bad-scope/.test(c.detail)));
+});
+
+test('doctor code-rules-config: ok "N rule(s) valid" when every rule is well formed', () => {
+  const checks = codeRulesChecks({
+    verify: {
+      rules: [
+        { id: 'r1', message: 'm1', forbid: 'foo' },
+        { id: 'r2', message: 'm2', when: 'bar', require: 'baz' },
+      ],
+    },
+  });
+  assert.equal(checks.length, 1);
+  assert.equal(checks[0].status, 'ok');
+  assert.match(checks[0].detail, /2 rule\(s\) valid/);
+});
+
+test('doctor code-rules-config: also validates config.repos[*].verify.rules (multi-repo, FR-006/FR-011)', () => {
+  const checks = inTmp((dir) => {
+    maintenance['init-project']({ stack: 'node' });
+    const cfgPath = '.spec-flow/config.json';
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    const svcDir = path.join(dir, 'svc-a');
+    fs.mkdirSync(svcDir, { recursive: true });
+    fs.mkdirSync(path.join(svcDir, '.git'), { recursive: true });
+    cfg.repos = { 'svc-a': { path: './svc-a', verify: { rules: [{ forbid: 'x' }] } } };
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+    return maintenance.doctor({}).data.checks.filter(c => c.name === 'code-rules-config');
+  });
+  assert.ok(checks.some(c => c.status === 'warn' && /svc-a/.test(c.detail)), 'must surface a per-repo rules problem, labeled by repo name');
 });
 
 // ---------------------------------------------------------------------------
