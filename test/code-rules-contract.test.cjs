@@ -19,6 +19,8 @@ const root = path.resolve(__dirname, '..');
 const phaseMd = fs.readFileSync(path.join(root, 'commands/phase.md'), 'utf8');
 const executorMd = fs.readFileSync(path.join(root, 'agents/hybrid-executor.md'), 'utf8');
 const reviewCjs = fs.readFileSync(path.join(root, 'lib/review.cjs'), 'utf8');
+const bugMd = fs.readFileSync(path.join(root, 'commands/bug.md'), 'utf8');
+const changeMd = fs.readFileSync(path.join(root, 'commands/change.md'), 'utf8');
 
 test('commands/phase.md: "House style is not a finding" is gone (TC-026)', () => {
   assert.doesNotMatch(phaseMd, /House style is not a finding/);
@@ -94,6 +96,53 @@ test('agents/hybrid-executor.md GREEN phase: runs verify-code and fixes any code
   assert.match(block, /verify-code/);
   assert.match(block, /code-rules/);
   assert.match(block, /config\.verify\.rules/);
+});
+
+// /sf:bug spawns hybrid-executor directly (not via /sf:phase), so it must carry
+// the same Code Rules contract itself or a bug fix bypasses the rules.
+function section(md, startMarker, endMarker) {
+  const start = md.indexOf(startMarker);
+  assert.ok(start >= 0, `missing section marker: ${startMarker}`);
+  const end = md.indexOf(endMarker, start + startMarker.length);
+  return md.slice(start, end < 0 ? undefined : end);
+}
+
+test('commands/bug.md STEP 4a: pastes ## Code Rules verbatim and checks the compliance table', () => {
+  const block = section(bugMd, '## STEP 4a', '## STEP 5');
+  assert.match(block, /## Code Rules[\s\S]*verbatim/);
+  assert.match(block, /Rule \| Status \| Notes/);
+  assert.match(block, /violated/);
+  assert.match(block, /send it back/);
+});
+
+test('commands/bug.md STEP 5: runs verify-code (incl. code-rules) before the repro, failing loops back to 4a', () => {
+  const block = section(bugMd, '## STEP 5', '## STEP 6');
+  const gate = block.indexOf('verify-code --feature');
+  const repro = block.indexOf('run-checklist.sh');
+  assert.ok(gate >= 0, 'STEP 5 must run verify-code');
+  assert.ok(gate < repro, 'verify-code must run before the repro checklist');
+  assert.match(block, /code-rules/);
+  assert.match(block, /config\.verify\.rules/);
+  assert.match(block, /loop back to STEP 4a/);
+});
+
+test('commands/change.md step 6: runs verify-code (incl. code-rules) over the whole change before the checklist', () => {
+  const block = section(changeMd, '6. **Re-verify**', '7. **State sync**');
+  const gate = block.indexOf('verify-code --feature');
+  const smoke = block.indexOf('run-checklist.sh');
+  assert.ok(gate >= 0, 'step 6 must run verify-code');
+  assert.ok(gate < smoke, 'verify-code must run before the smoke checklist');
+  assert.match(block, /code-rules/);
+  assert.match(block, /config\.verify\.rules/);
+});
+
+test('commands/change.md step 6: routes through the phase code review (3b) so project-rule findings block', () => {
+  const block = section(changeMd, '6. **Re-verify**', '7. **State sync**');
+  assert.match(block, /step 3b/);
+  assert.match(block, /review-collect/);
+  assert.match(block, /config\.phase\.codeReview/);
+  assert.match(block, /project-rule/);
+  assert.match(block, /review-accept/);
 });
 
 test('lib/review.cjs: contextPack comment no longer says house style is not a finding', () => {

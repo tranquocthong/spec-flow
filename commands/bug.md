@@ -106,6 +106,8 @@ Spawn **hybrid-executor** with:
 
 **No SD?** Substitute the contract: replace "MATCH SD section `<ref>`" with "match the **expected behavior** in the bug report (expected/actual) + the failing repro test"; drop the "Impacted nodes" line. Everything else (do-not-touch-other-behavior, minimal diff, RED→GREEN→REFACTOR) stays.
 
+**`## Code Rules` are binding here too — a bug fix is not exempt.** Before spawning, extract the bullets under `## Code Rules` in `.spec-flow/project-author.md` (if any) and paste them **verbatim** into the executor prompt, the same as `/sf:phase` step 2. When there is ≥1 bullet, the executor's summary must carry the `Rule | Status | Notes` compliance table: missing table, a bullet with no row, or any row `violated` → send it back, do not go to STEP 5. Zero bullets → no table expected. **Model:** `config.json → models.hybridExecutor`; non-null → pass as the Agent `model` param, else omit.
+
 Log the fix attempt in "## Resolution log:" with a timestamp and summary of changes (note RED→GREEN→REFACTOR if a unit test was used).
 
 ---
@@ -118,6 +120,12 @@ Log the fix attempt in "## Resolution log:" with a timestamp and summary of chan
 > git fetch origin "$BASE" && git rebase "origin/$BASE"   # or: git merge "origin/$BASE" if the project prefers merge
 > ```
 > Resolve any conflicts, then re-run the fix's build/unit tests before proceeding. Skip only when `branching.mode: off`. **Rationale:** a green result on a stale base can (a) "reproduce"/verify against a bug already fixed on `main`, or (b) pass a fix that breaks once merged onto current `main`. Anchoring verification to main-latest + the fix makes green reflect what will actually ship.
+
+**Automated quality gate first** — the same static checks `/sf:phase` runs, including `code-rules` (from `config.verify.rules`, diff-scoped: only lines this branch added or changed can fail it):
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs verify-code --feature <feature>
+```
+`gate: "fail"` → append the failing check's `detail` to "Resolution log:" and loop back to STEP 4a. Do not run the repro on a fix that fails the gate.
 
 ```bash
 scripts/run-checklist.sh .spec-flow/specs/<feature>/CHECKLIST.yaml --id <bug-id> --json | tee .spec-flow/specs/<feature>/bug-<bug-id>-results.txt
@@ -180,10 +188,11 @@ STEP 3  TRIAGE       trace-impact → SD section → decide type
      └─ code-bug (SD correct)
           │
           ▼
-     STEP 4a  CODE-FIX  hybrid-executor (code only, SD untouched; RED→GREEN→REFACTOR if unit harness)
+     STEP 4a  CODE-FIX  hybrid-executor (code only, SD untouched; RED→GREEN→REFACTOR if unit harness;
+                        ## Code Rules pasted verbatim + compliance table checked)
           │
           ▼
-     STEP 5   VERIFY     run repro test → must PASS; if FAIL → loop 4a
+     STEP 5   VERIFY     verify-code (incl. code-rules) → run repro test → must PASS; if FAIL → loop 4a
           │
           ▼
      STEP 6   REGRESS    test stays; bug status=done; VERIFICATION updated
