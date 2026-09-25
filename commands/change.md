@@ -85,6 +85,12 @@ If impact spans multiple nodes, or you're unsure, run the full steps below.
    > git fetch origin "$BASE" && git rebase "origin/$BASE"   # or: git merge "origin/$BASE" if the project prefers merge
    > ```
    > Resolve any conflicts, then re-run the change's build/unit tests before proceeding. Skip only when `branching.mode: off`. **Rationale:** a green result on a stale base can pass a change that breaks once merged onto current `main`; anchoring verification to main-latest + the change makes green reflect what will actually ship.
+
+   **Automated quality gate over the whole change, after the sync.** Step 5 ran `verify-code --task` per task; the rebase and a multi-task change are not covered by that. Run it once unscoped, which also runs `code-rules` (from `config.verify.rules`, diff-scoped to what this branch added or changed):
+   ```
+   node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs verify-code --feature <feature>
+   ```
+   `gate: "fail"` → surface `detail` + `fix`, loop back to step 5. Do not run the checklist on a change that fails the gate.
    ```
    scripts/run-checklist.sh .spec-flow/specs/<feature>/CHECKLIST.yaml --tag smoke --json | tee .spec-flow/specs/<feature>/change-results.txt
    ```
@@ -93,6 +99,7 @@ If impact spans multiple nodes, or you're unsure, run the full steps below.
    node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs verify-collect --results .spec-flow/specs/<feature>/change-results.txt
    ```
    - **Still failing** → loop back to step 2 (update SD → re-trace → re-implement → re-verify). Record each iteration in the change `.md`.
+   - **PASS, before closing: code review.** Run `/sf:phase` close-out step 3b (`review-scope` → reviewer → `review-collect`) over this change's diff, under the same `config.phase.codeReview` setting. Every `## Code Rules` bullet is checked there and a `project-rule` finding blocks, so a change cannot bypass the rules the reviewer enforces on a phase. `blocking` → fix (loop back to step 5) or `review-accept` with a note.
    - **PASS** → **confirm the close with the user** (the user is the source of truth for "done"). Announce + ask, right now in this session: *`change-<id>` — verified green. Close it (`status: active` → `done`), or keep open?* On confirm → set `status: done` + append `truths[]` to `VERIFICATION.md must_haves.truths`. On defer → leave `status: active` (`/sf:status` keeps surfacing it). Don't auto-close, don't rely on the user remembering later — but the decision is theirs. A change isn't done until its record reads `status: done`.
 
 7. **State sync** after each task closes:
@@ -110,6 +117,7 @@ If impact spans multiple nodes, or you're unsure, run the full steps below.
 
 ## Pipeline recap
 ```
-trace-impact (from edited SD section) → re-open tasks → /sf:phase → run-checklist
+trace-impact (from edited SD section) → re-open tasks → /sf:phase → verify-code (incl. code-rules)
+  → run-checklist → [optional gate] code review (phase step 3b)
   → verify-collect feeds VERIFICATION.md → loop back if not satisfied
 ```

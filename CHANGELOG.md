@@ -2,6 +2,15 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [0.13.1] — 2026-09-25
+
+### Fixed
+
+- **`/sf:bug` and `/sf:change` skipped the coding-rules gate that 0.13.0 added to `/sf:phase`.** `/sf:bug` spawns `hybrid-executor` directly rather than through `/sf:phase`, so a bug fix got no `## Code Rules` bullets in its prompt, no compliance table was checked, and its verify step ran only the repro and regression checklists, never `verify-code`. `/sf:change` re-implements through `/sf:phase`, but its re-verify ran only the smoke checklist, and no code review looked at the change as a whole.
+  - `/sf:bug` STEP 4a now pastes the `## Code Rules` bullets verbatim into the executor prompt and sends back a summary with a missing table, a missing row or an open `violated` row, the same as `/sf:phase` step 2. STEP 5 runs `verify-code --feature` (including `code-rules`) before the repro, and a failing gate loops back to 4a.
+  - `/sf:change` step 6 runs `verify-code --feature` over the whole change after the sync to the base branch and before the smoke checklist. On a green checklist it runs the `/sf:phase` step 3b code review under the same `config.phase.codeReview` setting, so a `project-rule` finding blocks the close unless `review-accept` overrides it.
+  - Contract tests for both commands added to `test/code-rules-contract.test.cjs`.
+
 ## [0.13.0] — 2026-09-24
 
 ### Added
