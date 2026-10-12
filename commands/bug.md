@@ -165,6 +165,7 @@ scripts/run-checklist.sh .spec-flow/specs/<feature>/CHECKLIST.yaml --tag regress
    node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs state-update \
      --feature <feature> --note "bug closed: <id>"
    ```
+5. **Name any leftover worktree.** `node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs worktree-info`. If `worktrees` is non-empty (this session runs in a linked `git worktree`), end the report with its `reminder` verbatim: path, size, `git worktree remove` command, to run from the main worktree once the fix is merged. Do not remove it yourself. A worktree is a full checkout that nothing else reclaims, and they pile up until the disk is full.
 
 ---
 
