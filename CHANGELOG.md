@@ -2,6 +2,12 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [0.15.0] — 2026-10-14
+
+### Added
+
+- **A ship now names the git worktrees it leaves behind.** A parallel SD runs in its own linked `git worktree` so two sessions stop sharing `STATE.md` and `tasks.json`, but a worktree is a full checkout and nothing removed it when the work closed, so they accumulated until the disk filled. `state-update --shipped` now returns `worktrees` and a `WORKTREE CLEANUP` warning (path, size, branch, and the exact `git worktree remove` command, run from the main worktree); `/sf:phase`, `/sf:bug` and `/sf:change` tell the agent to end the close-out report with it. The new read-only `worktree-info` gives the same list on demand, covering the current directory and every `config.repos` root. It never removes anything: the PR is usually not merged at ship time, and a worktree cannot be removed from inside itself.
+
 ## [0.14.0] — 2026-10-01
 
 ### Changed

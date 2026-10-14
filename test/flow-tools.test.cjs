@@ -4329,3 +4329,62 @@ test('state-update: shipped "nothing pending" nextStep names the top open backlo
   assert.ok(r.data.nextStep.startsWith(before), 'hint is appended, original text kept');
   assert.match(r.data.nextStep, /Backlog: 2 open — top: bl-002 "Urgent thing"/);
 });
+
+// ---------------------------------------------------------------------------
+// worktree cleanup reminder: a parallel SD runs in a linked git worktree, a full
+// checkout that nothing removes when the work closes.
+// ---------------------------------------------------------------------------
+
+test('worktree-info: a main checkout reports nothing', () => {
+  const root = tmpProject();
+  const dir = makeGitRepo(root, 'proj');
+  initProject(dir);
+  const r = run(['worktree-info'], dir);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.data.worktrees, []);
+  assert.equal(r.data.reminder, null);
+});
+
+test('worktree-info: a linked worktree is reported with branch, size and the remove command run from the main tree', () => {
+  const root = tmpProject();
+  const main = makeGitRepo(root, 'proj');
+  const wt = path.join(root, 'proj-sd2');
+  execFileSync('git', ['-C', main, 'worktree', 'add', '-q', '-b', 'feat/sd2', wt], { stdio: 'ignore' });
+  initProject(wt);
+  const r = run(['worktree-info'], wt);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.worktrees.length, 1);
+  const w = r.data.worktrees[0];
+  assert.equal(w.path, fs.realpathSync(wt));
+  assert.equal(w.mainWorktree, fs.realpathSync(main));
+  assert.equal(w.branch, 'feat/sd2');
+  assert.ok(w.sizeMb >= 0, 'size is reported in MB');
+  assert.equal(w.removeCommand, `git -C ${fs.realpathSync(main)} worktree remove ${fs.realpathSync(wt)}`);
+  assert.match(r.data.reminder, /WORKTREE CLEANUP/);
+});
+
+test('state-update --shipped: inside a linked worktree the ship result carries the cleanup reminder; without --shipped it stays quiet', () => {
+  const root = tmpProject();
+  const main = makeGitRepo(root, 'proj');
+  const wt = path.join(root, 'proj-sd2');
+  execFileSync('git', ['-C', main, 'worktree', 'add', '-q', '-b', 'feat/sd2', wt], { stdio: 'ignore' });
+  initProject(wt);
+  let r = run(['state-update', '--feature', 'feat-w'], wt);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.worktrees, undefined, 'mid-flow state-update does not nag');
+  assert.ok(!(r.data.warnings || []).join(' ').includes('WORKTREE CLEANUP'));
+  r = run(['state-update', '--feature', 'feat-w', '--shipped'], wt);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.worktrees.length, 1);
+  assert.match((r.data.warnings || []).join(' '), /WORKTREE CLEANUP/);
+});
+
+test('state-update --shipped: a plain checkout ships without any worktree noise', () => {
+  const root = tmpProject();
+  const dir = makeGitRepo(root, 'proj');
+  initProject(dir);
+  const r = run(['state-update', '--feature', 'feat-p', '--shipped'], dir);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.data.worktrees, []);
+  assert.ok(!(r.data.warnings || []).join(' ').includes('WORKTREE CLEANUP'));
+});
