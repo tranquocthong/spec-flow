@@ -133,7 +133,7 @@ spec-flow is a two-tier overlay. The plugin is the engine and never changes per 
 CONTEXT.md                    locked decisions, fed to every agent
 ```
 
-Per-feature files are keyed by the feature directory, so two features can never clobber each other. The root mirrors are derived and regenerated on every `trace-build` or `state-update`. A merge conflict on a mirror is benign: take either side and rebuild.
+Per-feature files are keyed by the feature directory, so two features can never clobber each other. The root mirrors are derived and regenerated on every `trace-build` or `state-update`. `init-project` git-ignores the two root mirrors (`.spec-flow/trace.json`, `.spec-flow/STATE.md`) because tracked they dirty the tree on every build and get committed holding another feature's state; `/sf:doctor` warns (`state-mirror-tracked`) when a project still tracks them. If a mirror does conflict, it is benign: take either side and rebuild.
 
 ## Configuration
 

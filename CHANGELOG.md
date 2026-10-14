@@ -2,6 +2,13 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [0.15.1] — 2026-10-14
+
+### Changed
+
+- **The two root mirrors are git-ignored, and `/sf:doctor` warns when a project still tracks them.** `.spec-flow/trace.json` and `.spec-flow/STATE.md` are derived "active feature" mirrors, rewritten by every `trace-build` and `state-update` and shared by every concurrent session, but nothing kept them out of git. In a downstream project that ran features in parallel they were tracked: every build dirtied the tree, and two agents were seen resolving it by hand, each restoring the mirror to a different feature (one to the feature it was building, one to the last committed copy, which belonged to a third). A mirror had also been committed on `main` holding another feature's state. `init-project` now appends `/.spec-flow/trace.json` and `/.spec-flow/STATE.md` to `.gitignore` (idempotent; the durable `specs/<feature>/` copies stay tracked), and the new `state-mirror-tracked` doctor check warns, with the exact `git rm --cached` fix, when the mirrors are tracked or sit untracked but not ignored. It never touches git itself. An existing project needs the `git rm --cached` once; the session re-anchor hook already tolerates a missing `STATE.md`, so a fresh clone simply has no mirror until the first `state-update`.
+- The new tests run against a git that reads no global config: a developer's global gitignore that already covers `.spec-flow/` (the maintainer's does) made every ignore/track assertion depend on the machine.
+
 ## [0.15.0] — 2026-10-14
 
 ### Added
