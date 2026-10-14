@@ -27,7 +27,7 @@ Input: `$ARGUMENTS` (all optional; spec-flow auto-detects project name from the 
    ```
    node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs init-project $ARGUMENTS [--no-commit-docs] [--language <code>]
    ```
-   Creates (idempotent — existing files left untouched): `.spec-flow/config.json`, `.spec-flow/project-author.md`, and the `srs/`, `snapshots/`, `changes/`, `bugs/` dirs. With `--no-commit-docs` it also appends `.spec-flow/` to the project `.gitignore`.
+   Creates (idempotent — existing files left untouched): `.spec-flow/config.json`, `.spec-flow/project-author.md`, and the `srs/`, `snapshots/`, `changes/`, `bugs/` dirs. By default it appends `/.spec-flow/trace.json` and `/.spec-flow/STATE.md` to the project `.gitignore`: they are derived "active feature" mirrors rewritten by every `trace-build`/`state-update`, and the durable copies live in `.spec-flow/specs/<feature>/`. With `--no-commit-docs` it appends `.spec-flow/` instead.
 
    **Multi-repo (`--repos`):** when one SRS/SD is implemented across several service repos, pass `--repos "auth-svc=../auth-svc,billing-svc=../billing-svc"` (logical name = relative path from THIS hub repo). This seeds `config.repos`, and from then on `verify-code` scans every repo, `branch-ensure` branches every repo, and `/sf:phase` cd's into the right one per task. Omit it for the normal single-repo case. Editable later in `config.json` → `repos`.
 
@@ -76,7 +76,7 @@ Input: `$ARGUMENTS` (all optional; spec-flow auto-detects project name from the 
 4. **Report** `created` / `alreadyExisted` and the `commitPolicy` from tool output, plus Task Master status (initialised / already present / **deferred** with the manual commands if it failed).
 
 5. **Next**:
-   - Commit chosen → tell the user: `git add .spec-flow/ .taskmaster/ && git commit -m "chore: init spec-flow profile"`.
+   - Commit chosen → tell the user: `git add .spec-flow/ .taskmaster/ .gitignore && git commit -m "chore: init spec-flow profile"`. If `/sf:doctor` later warns `state-mirror-tracked`, the project tracked those two mirrors before: run the `git rm --cached` it prints.
    - Keep local → note `.spec-flow/` was added to `.gitignore`; nothing to commit.
    - **Provider:** default is **`claude-code` — no API key required** (`parse-prd` / `expand` run through your Claude Code session). Only if you prefer your own provider: add `ANTHROPIC_API_KEY` (and `PERPLEXITY_API_KEY` for research) to your environment or `.mcp.json` and switch with `node ${CLAUDE_PLUGIN_ROOT}/bin/task-master models --set-main <model> --<provider>`.
 

@@ -4388,3 +4388,101 @@ test('state-update --shipped: a plain checkout ships without any worktree noise'
   assert.deepEqual(r.data.worktrees, []);
   assert.ok(!(r.data.warnings || []).join(' ').includes('WORKTREE CLEANUP'));
 });
+
+// ---------------------------------------------------------------------------
+// state mirrors: .spec-flow/trace.json + STATE.md are derived "active feature"
+// mirrors rewritten by every trace-build/state-update. They must not be tracked.
+// ---------------------------------------------------------------------------
+
+// A developer's global gitignore can already swallow `.spec-flow/` (the maintainer of this
+// repo has one), which makes every ignore/track assertion below depend on the
+// machine. Run these tests against a git that reads no global or system config.
+function isolatedGit(fn) {
+  return () => {
+    // XDG_CONFIG_HOME matters too: git reads $XDG_CONFIG_HOME/git/ignore as the default
+    // excludes file even with no core.excludesFile configured.
+    const keys = ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'XDG_CONFIG_HOME'];
+    const prev = keys.map((k) => process.env[k]);
+    process.env.GIT_CONFIG_GLOBAL = '/dev/null';
+    process.env.GIT_CONFIG_NOSYSTEM = '1';
+    process.env.XDG_CONFIG_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sf-xdg-'));
+    try { return fn(); }
+    finally { keys.forEach((k, n) => { if (prev[n] === undefined) delete process.env[k]; else process.env[k] = prev[n]; }); }
+  };
+}
+
+const MIRROR_LINES = ['/.spec-flow/trace.json', '/.spec-flow/STATE.md'];
+const mirrorCheck = (r) => r.data.checks.find((c) => c.name === 'state-mirror-tracked');
+
+test('init-project: ignores the two derived mirrors, keeps existing .gitignore, and is idempotent', isolatedGit(() => {
+  const root = tmpProject();
+  const dir = makeGitRepo(root, 'proj');
+  fs.writeFileSync(path.join(dir, '.gitignore'), 'node_modules/\nbuild');
+  let r = run(['init-project', '--stack', 'node'], dir);
+  assert.equal(r.ok, true);
+  assert.ok(r.data.created.some((c) => c.includes('state mirrors')), 'reports the .gitignore write');
+  let gi = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8');
+  assert.match(gi, /^node_modules\/\nbuild\n/, 'existing content kept, newline repaired');
+  for (const l of MIRROR_LINES) assert.ok(gi.split('\n').includes(l), `${l} ignored`);
+  r = run(['init-project', '--stack', 'node'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8'), gi, 'second run changes nothing');
+  // The durable per-feature files and the rest of .spec-flow/ stay trackable.
+  fs.mkdirSync(path.join(dir, '.spec-flow', 'specs', 'f'), { recursive: true });
+  for (const f of ['.spec-flow/trace.json', '.spec-flow/STATE.md']) fs.writeFileSync(path.join(dir, f), 'x');
+  fs.writeFileSync(path.join(dir, '.spec-flow', 'specs', 'f', 'trace.json'), 'x');
+  const ignored = (f) => { try { execFileSync('git', ['-C', dir, 'check-ignore', '-q', f]); return true; } catch { return false; } };
+  assert.equal(ignored('.spec-flow/trace.json'), true);
+  assert.equal(ignored('.spec-flow/STATE.md'), true);
+  assert.equal(ignored('.spec-flow/specs/f/trace.json'), false, 'durable per-feature trace is not ignored');
+  assert.equal(ignored('.spec-flow/config.json'), false);
+}));
+
+test('init-project --no-commit-docs: keeps the single .spec-flow/ rule, no mirror lines', isolatedGit(() => {
+  const root = tmpProject();
+  const dir = makeGitRepo(root, 'proj');
+  const r = run(['init-project', '--stack', 'node', '--no-commit-docs'], dir);
+  assert.equal(r.ok, true);
+  const gi = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8');
+  assert.match(gi, /^\.spec-flow\/$/m);
+  assert.ok(!gi.includes('trace.json'));
+}));
+
+test('doctor state-mirror-tracked: warns when the mirrors are tracked, names the fix, goes ok after it', isolatedGit(() => {
+  const root = tmpProject();
+  const dir = makeGitRepo(root, 'proj');
+  fs.mkdirSync(path.join(dir, '.spec-flow'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.spec-flow', 'trace.json'), '{}');
+  fs.writeFileSync(path.join(dir, '.spec-flow', 'STATE.md'), '# STATE\n');
+  execFileSync('git', ['-C', dir, 'add', '.spec-flow'], { stdio: 'ignore' });
+  execFileSync('git', ['-C', dir, 'commit', '-q', '-m', 'track mirrors'], { stdio: 'ignore' });
+
+  let r = run(['doctor'], dir);
+  let c = mirrorCheck(r);
+  assert.ok(c, 'check present');
+  assert.equal(c.status, 'warn');
+  assert.match(c.detail, /trace\.json \+ \.spec-flow\/STATE\.md are tracked by git/);
+  assert.match(c.fix, /git rm --cached \.spec-flow\/trace\.json \.spec-flow\/STATE\.md/);
+
+  // Apply the documented fix.
+  execFileSync('git', ['-C', dir, 'rm', '-q', '--cached', '.spec-flow/trace.json', '.spec-flow/STATE.md'], { stdio: 'ignore' });
+  assert.equal(run(['init-project', '--stack', 'node'], dir).ok, true);
+  r = run(['doctor'], dir);
+  assert.equal(mirrorCheck(r).status, 'ok');
+}));
+
+test('doctor state-mirror-tracked: untracked but not ignored is a warning; outside a git repo the check is absent', isolatedGit(() => {
+  const root = tmpProject();
+  const dir = makeGitRepo(root, 'proj');
+  fs.mkdirSync(path.join(dir, '.spec-flow'), { recursive: true });
+  let r = run(['doctor'], dir);
+  let c = mirrorCheck(r);
+  assert.equal(c.status, 'warn');
+  assert.match(c.detail, /not git-ignored/);
+  assert.match(c.fix, /init-project/);
+
+  const plain = tmpProject();
+  fs.mkdirSync(path.join(plain, '.spec-flow'), { recursive: true });
+  r = run(['doctor'], plain);
+  assert.equal(mirrorCheck(r), undefined, 'no git repo, no check');
+}));
