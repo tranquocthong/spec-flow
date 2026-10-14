@@ -236,7 +236,8 @@ Two CLIs ship in `bin/`. Both are zero-network and print one JSON line per call.
 | Review | `review-scope [--feature]` | whether the optional pre-ship review runs (`config.phase.codeReview`: off by default, or ask, always) and over what: base branch, `<base>...HEAD`, the files from `file-links.json`, plus any prior verdict and whether HEAD moved past it |
 | | `review-collect --feature --findings [--target]` | reviewer findings into `CODE-REVIEW.md`, verdict `clean`, `advisory` or `blocking` (any critical/high) |
 | | `review-accept --feature --note` | record that a human chose to ship with open blocking findings |
-| State | `state-update --feature [--note] [--shipped]` | refresh per-feature `STATE.md` plus the mirror |
+| State | `state-update --feature [--note] [--shipped]` | refresh per-feature `STATE.md` plus the mirror; with `--shipped` also warns about leftover linked worktrees |
+| | `worktree-info` | list linked git worktrees (cwd and `config.repos`) with size and the `git worktree remove` command; read-only |
 | | `checkpoint-write` / `checkpoint-clear` | mid-task checkpoint |
 | | `task-baseline --feature [--apply]` | mark tasks done from verification evidence only, dry-run by default |
 | | `wave-plan [--max]` | ready set of pending tasks whose dependencies are done |

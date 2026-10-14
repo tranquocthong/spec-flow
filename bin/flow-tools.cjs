@@ -10,7 +10,7 @@
  * Usage:  node flow-tools.cjs <command> [--key value ...]
  *
  * Commands: init, srs-snapshot, sd-skeleton, route, checklist-gen, trace-build, trace-impact,
- *           trace-repos, trace-link, srs-diff, state-update, verify-collect, verify-code, wave-plan,
+ *           trace-repos, trace-link, srs-diff, state-update, worktree-info, verify-collect, verify-code, wave-plan,
  *           review-scope, review-collect, review-accept,
  *           task-baseline, taskmaster-model-plan, taskmaster-model-check,
  *           epic-new, epic-attach, epic-list, epic-show, bug-new, bug-list, branch-ensure,
@@ -21,7 +21,7 @@
 const fs = require('fs');
 const path = require('path');
 const {
-  STATE_DIR, PATHS, PLUGIN_ROOT, STATE_FILE, SKIP_SCAN_DIRS, SD_COLS, ok, err, parseArgs, readJsonSafe, traceFileFor, readTrace, hydrateTrace, resolveActiveFeature, stateFileFor, stateFeatureOf, shipFileFor, ensureDir, slugify, pad3, readTmTasks, fileLinksPathFor, resolveRepos, parseReposArg, langPack, kwRe, cleanHeading, parseHeadings, bodyOf, classifyHeading, findHeading, findTableByHeader, parseFirstTable, parseAllTables, splitRow, resolveCols, tableShapeWarnings, parseUserStories, trimOrNull, extractBulletsAfter, inferDesignType, parseSrs, parseProseBullets, TODO, countSdTodos, mdCell, moscowFor, genSd, readSdTables, scoreComplexity, routeFor, tcIdsForReq, resolveTemplate
+  STATE_DIR, PATHS, PLUGIN_ROOT, STATE_FILE, SKIP_SCAN_DIRS, SD_COLS, ok, err, parseArgs, readJsonSafe, traceFileFor, readTrace, hydrateTrace, resolveActiveFeature, stateFileFor, stateFeatureOf, shipFileFor, worktreeInfo, ensureDir, slugify, pad3, readTmTasks, fileLinksPathFor, resolveRepos, parseReposArg, langPack, kwRe, cleanHeading, parseHeadings, bodyOf, classifyHeading, findHeading, findTableByHeader, parseFirstTable, parseAllTables, splitRow, resolveCols, tableShapeWarnings, parseUserStories, trimOrNull, extractBulletsAfter, inferDesignType, parseSrs, parseProseBullets, TODO, countSdTodos, mdCell, moscowFor, genSd, readSdTables, scoreComplexity, routeFor, tcIdsForReq, resolveTemplate
 } = require('../lib/core.cjs');
 const maintenance = require('../lib/maintenance.cjs');
 const backlog = require('../lib/backlog.cjs');
@@ -62,6 +62,28 @@ const taskCli = require('../lib/task-cli.cjs');
  * way out — which is a person putting their name on the evidence, not a default.
  */
 const VERIFIED_STATUS_RE = /^[ \t]*status:[ \t]*(?:passed|verified-adhoc)\b/im;
+
+// Linked worktrees for cwd and every config.repos root, de-duplicated by path. A repo
+// root that is a main checkout contributes nothing. Best-effort: a git failure on one
+// root drops that root, it never fails the calling command.
+function collectWorktrees() {
+  const cfg = readJsonSafe(PATHS.config, {});
+  const roots = [{ name: null, root: process.cwd() }];
+  try { for (const r of resolveRepos(cfg)) if (r.name) roots.push({ name: r.name, root: r.root }); } catch {}
+  const seen = new Set();
+  const out = [];
+  for (const { name, root } of roots) {
+    const w = worktreeInfo(root);
+    if (!w || seen.has(w.path)) continue;
+    seen.add(w.path);
+    out.push({ ...w, repo: name });
+  }
+  return out;
+}
+function worktreeReminder(worktrees) {
+  const lines = worktrees.map((w) => `  - ${w.path}${w.sizeMb != null ? ` (${w.sizeMb} MB)` : ''}${w.branch ? ` on ${w.branch}` : ''}: ${w.removeCommand}`);
+  return `WORKTREE CLEANUP: ${worktrees.length} linked git worktree(s) are still on disk. Each is a full checkout, and nothing removes it automatically. Once the PR is merged, run from the main worktree (not from inside the one being removed), then delete the merged branch:\n${lines.join('\n')}`;
+}
 
 const commands = {
   ...maintenance,
@@ -912,7 +934,23 @@ const commands = {
         } catch {}
       }
     }
-    return ok({ state: STATE_FILE, perFeatureState, switchedFrom, shipped: shipped ? { shippedAt: shipped.shippedAt, ref: shipped.ref } : null, lines: lineCount, nextStep, warnings: stateWarnings, ...epicField });
+    // A ship is the moment the user is looking at the result, so it is where a leftover
+    // linked worktree gets named — each one is a full checkout that nothing else removes.
+    const wtField = args.shipped ? { worktrees: collectWorktrees() } : {};
+    if (args.shipped && wtField.worktrees.length) stateWarnings.push(worktreeReminder(wtField.worktrees));
+    return ok({ state: STATE_FILE, perFeatureState, switchedFrom, shipped: shipped ? { shippedAt: shipped.shippedAt, ref: shipped.ref } : null, lines: lineCount, nextStep, warnings: stateWarnings, ...wtField, ...epicField });
+  },
+
+  // -----------------------------------------------------------------------
+  // worktree-info
+  // Lists the linked git worktrees this project is running in (cwd plus every
+  // config.repos root) with size and the exact removal command. Read-only: it never
+  // removes anything — run the command from the main worktree once the PR is merged.
+  // Returns ok({ worktrees:[{path,mainWorktree,branch,sizeMb,removeCommand,repo}], reminder }).
+  // -----------------------------------------------------------------------
+  'worktree-info'() {
+    const worktrees = collectWorktrees();
+    return ok({ worktrees, reminder: worktrees.length ? worktreeReminder(worktrees) : null });
   },
 
   // -----------------------------------------------------------------------
