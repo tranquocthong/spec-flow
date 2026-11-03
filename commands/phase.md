@@ -77,7 +77,7 @@ Deterministic per-FR complexity (1–10) — this is the **only** complexity sig
 
    **Parallel batch:** steps 3-6 still run once per task, in any order — safe only because you judged the batch file-disjoint. Do **not** parallelize `trace-build` (it rebuilds the whole file); run it once after every task in the batch has logged its `trace-link`.
 
-   **Check TDD evidence in the executor's summary before proceeding.** Feature task: a test file written plus either `gate: "red-confirmed"` or an explicit note that testCommand is not configured — if neither, ask for the RED confirmation. Chore task: "chore — RED phase skipped" is expected.
+   **Check TDD evidence in the executor's summary before proceeding.** Feature task: a test file written plus either `gate: "red-confirmed"` or an explicit note that testCommand is not configured — if neither, ask for the RED confirmation. Chore task: "chore — RED phase skipped" is expected. Live-only task (every TC at Level `live`): `live-only TCs — proven by CHECKLIST` is equally valid TDD evidence — no test file and no RED confirmation expected, request no extra RED confirmation and continue to the next step without stopping to ask.
 
    **Check the `## Code Rules` compliance table the same way.** `## Code Rules` had ≥1 bullet and the summary is missing the table, missing a bullet's row, or has any row `violated` → send it back, do not proceed. Zero bullets → no table expected.
 

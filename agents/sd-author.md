@@ -25,8 +25,8 @@ Author all **free prose** in that language (e.g. `vi` → Vietnamese): the §1 O
 
 **But KEEP these in canonical English exactly — the deterministic engine parses them by literal text, and localizing them BREAKS checklist-gen + trace-build:**
 - **Section headings & numbers** — `## 5. Requirements`, `### 5.1 Functional Requirements`, `### 5.2 Non-Functional Requirements`, `### 13.2 Test Cases`, `## 7. Data Model`, `## 9. API Design`, etc. (numbers + canonical English titles).
-- **Table column headers** — `| ID | Requirement | Priority | Source |`, `| TC ID | Flow | Test Case | Input / Condition | Expected Result | FR |`, `| ID | Category | Requirement | Target |`. Header *text* stays English; the cell *content* below is localized.
-- **All IDs** (`FR-001`, `TC-001`, `NFR-001`, `ERR_*`), **MoSCoW priority values** (`Must Have` / `Should Have` / `Could Have`), and every **code identifier** (class/DTO/field/method/endpoint/enum name, package path).
+- **Table column headers** — `| ID | Requirement | Priority | Source |`, `| TC ID | Flow | Test Case | Input / Condition | Expected Result | FR | Level |`, `| ID | Category | Requirement | Target |`. Header *text* stays English; the cell *content* below is localized.
+- **All IDs** (`FR-001`, `TC-001`, `NFR-001`, `ERR_*`), **MoSCoW priority values** (`Must Have` / `Should Have` / `Could Have`), the **`Level` values** (`unit` / `slice` / `it` / `live` — English tokens whatever the document language), and every **code identifier** (class/DTO/field/method/endpoint/enum name, package path).
 
 **Escape a literal `|` inside a table cell as `\|`.** A raw `|` in cell *content* — an enum spelling (`pending|done`), a payload or hash input joined by `|` — adds a column to that row: the table renders shifted/truncated for the reviewer, and `route` / `checklist-gen` / `trace-build` then read the wrong cells (a truncated Requirement, a priority taken from the neighbouring column). The escape is markdown-only: the value the cell denotes is the plain `|` character (U+007C). So whenever a requirement, test case, or payload genuinely uses `|` as a delimiter, add one line under that table stating it — e.g. `> The delimiter is the plain \`|\` character (U+007C); \`\\|\` above is markdown escaping only.` — because a `\` copy-pasted out of a rendered cell into code is a silent data bug that no test catches.
 
@@ -58,6 +58,19 @@ For each BL-xx rule with a failure condition or guard, derive:
 - One or more **failure TCs** (input violates rule → expected: specific error code from §12.2).
 
 Link each TC to its FR row and update `TC-xxx` IDs sequentially.
+
+The final §13.2 table has 7 columns, in this order: `| TC ID | Flow | Test Case | Input / Condition | Expected Result | FR | Level |`. Pass-1 emits a shorter table whose last column is `Level`; when you expand it, keep `Level` as the LAST column.
+
+**Assign a `Level` to every TC** (the last column of the §13.2 table). The policy — what each level means and when `it` is allowed — is defined in `templates/sd-template.md` §13.1; refer to it, do not restate or rewrite it in the SD. Rules:
+- **Cheapest level that can prove the TC** (`unit` < `slice` < `it` < `live`). Pick the lowest level at which the TC can still fail for the right reason.
+- `unit` — validation, mapping, label, error code, display. Pure logic, no wiring.
+- `slice` — needs routing/middleware (request mapping, serialization, security filter) but no real infrastructure.
+- `it` — ONLY when the TC is one of: query/repository, index, lock; money flow (hold/debit/refund), idempotency, concurrent request; consumer/producer by event contract; security wiring (one case per rule type, not per endpoint); schema migration. Anything else stays at `unit` or `slice`.
+- `live` — needs a deployed system: a cross-service flow, or behavior that depends on environment config.
+- Exactly one Level per TC (1 TC = 1 Level). Never leave the cell empty. The value is one of the English tokens `unit|slice|it|live` whatever the document language.
+- The Pass-1 draft has `unit` in every Level cell as a placeholder: Pass-2 must reassign the real Level per TC, not leave the placeholder.
+- Do not name any framework or tool in the SD for this. Stack-specific test detail belongs to the project's `## Code Rules`, not here.
+- **Resync (delta):** when invoked by `/sf:resync` with impacted FR/TC IDs, reassign Level only for TCs belonging to the changed FRs. Every other TC keeps its existing Level untouched.
 
 ### C. Derive §12.2 Domain Error Codes from failure rules
 For each failure path from step B, ensure a §12.2 row exists:
