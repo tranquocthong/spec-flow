@@ -2,6 +2,22 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [0.16.0] — 2026-11-03
+
+### Added
+
+- **Every test case in SD section 13.2 now declares the cheapest level that can prove it.** A new `Level` column takes `unit`, `slice`, `it` or `live`, and section 13.1 of the SD template is rewritten as a stack-agnostic policy: levels are defined by the infrastructure a case needs, and `it` is reserved for query and repository work, money flows and idempotency, event contracts, security wiring (one case per rule type) and schema migration. Pass-1 (`sd-skeleton`) emits the column with `unit` everywhere, `sd-author` assigns the real level per case, and `/sf:resync` reassigns it only for cases of the changed requirements.
+- **The engine reads the level.** `trace-build` stores `level` on every TC node and warns `TC_LEVEL_MISSING` or `TC_LEVEL_INVALID`, falling back to `unit`. `checklist-gen` emits an `it` case as `no-verify` and never lets it take the smoke slot of its flow. `testing.itBudget` (a positive integer, default off) makes both commands warn `IT_BUDGET_EXCEEDED` when the number of `it` cases is above it. Warnings never block.
+- **`verify.closeoutSuite: "ci"` hands the full suite to CI.** `verify-code` in full mode skips the test command and reports the tests check as `delegated` while the static checks still run; scoped runs (`--task`, `--files`) and `--expect fail` still execute tests. `verify-collect` records `Full test suite: delegated to CI` in `VERIFICATION.md`. The default `"local"` is unchanged.
+- **`/sf:doctor` checks both new keys**, with `WARN_ITBUDGET_INVALID` and `WARN_CLOSEOUTSUITE_INVALID`.
+- **The executor writes tests at the declared level.** `hybrid-executor` writes the test at each case's level, writes no test code for `live` cases, skips RED and reports `live-only TCs — proven by CHECKLIST` when every case of a task is `live` (`/sf:phase` accepts that as TDD evidence), and never raises a level on its own: it reports drift and points to `/sf:change`.
+
+An SD without a `Level` column behaves exactly as before.
+
+### Fixed
+
+- **`checklist-gen` no longer scaffolds a fake HTTP stub for a feature with no HTTP surface.** The template keeps the `## 9. API Design` heading even when the section says it does not apply, and that heading alone overrode an explicit `Design type: internal`, so every test got a `GET /api/v1/TODO` stub and 42 TODO markers. A section 9 whose body says "Không áp dụng", "N/A" or "Not applicable" is no longer counted as an API section; a section 9 with real content still is.
+
 ## [0.15.1] — 2026-10-14
 
 ### Changed
