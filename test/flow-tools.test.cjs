@@ -2091,6 +2091,37 @@ test('#1 checklist-gen: internal/no-HTTP SD emits live-e2e scaffold, not a fake 
   assert.match(cl2, /\/api\/v1\/TODO/, 'api design-type keeps the HTTP stub');
 });
 
+test('checklist-gen: internal SD whose §9 API Design says "Không áp dụng" is NOT treated as HTTP', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  const sdDir = path.join(dir, '.spec-flow', 'specs', 'na-api');
+  fs.mkdirSync(sdDir, { recursive: true });
+  const sdFor = (type, apiBody) => [
+    '# Solution Design: NaApi', '',
+    `> Refined by sd-author Pass-2. Design type: **${type}**.`, '',
+    '## 9. API Design', '', apiBody, '',
+    '## 10. Internal Process Design', '', 'x', '',
+    '## 13. Testing Strategy', '', '### 13.2 Test Cases', '',
+    '| TC ID | Flow | Test Case | Expected |',
+    '| --- | --- | --- | --- |',
+    '| TC-001 | cli | engine warns | warning emitted |', '',
+  ].join('\n');
+  const gen = (type, apiBody) => {
+    fs.writeFileSync(path.join(sdDir, 'SD.md'), sdFor(type, apiBody));
+    const r = run(['checklist-gen', '--sd', path.join(sdDir, 'SD.md'), '--feature', 'na-api', '--force'], dir);
+    assert.equal(r.ok, true);
+    return fs.readFileSync(path.join(sdDir, 'CHECKLIST.yaml'), 'utf8');
+  };
+  for (const body of ['Không áp dụng — internal CLI engine; không có HTTP endpoint mới.', 'N/A', 'Not applicable.']) {
+    const cl = gen('internal', body);
+    assert.match(cl, /live-e2e/, `§9 "${body}" + internal → live-e2e scaffold`);
+    assert.ok(!/\/api\/v1\/TODO/.test(cl), `§9 "${body}" must not emit a fake HTTP stub`);
+  }
+  // A real §9 body still wins even when the declared type says internal.
+  const real = gen('internal', 'POST /api/v1/orders creates an order.');
+  assert.match(real, /\/api\/v1\/TODO/, 'a real §9 section keeps the HTTP stub');
+});
+
 test('checklist-gen: clobber guard — CHECKLIST_EXISTS without --force, overwrites with --force', () => {
   const dir = tmpProject();
   initProject(dir);

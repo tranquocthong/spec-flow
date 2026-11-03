@@ -668,29 +668,46 @@ sequenceDiagram
 
 ## 13. Testing Strategy
 
-### 13.1 Test Coverage Requirements
+### 13.1 Test Level Policy
 
-| Layer              | Type             | Coverage Target | Tool               |
-|--------------------|------------------|-----------------|--------------------|
-| Unit Tests         | Business logic   | ≥ 80%           | Jest / JUnit       |
-| Integration Tests  | API endpoints    | Critical paths  | Supertest / RestAssured |
-| E2E Tests          | Critical flows   | Happy paths     | Playwright / Cypress|
-| Load Tests         | Performance      | NFR targets     | k6 / JMeter        |
-| Security Tests     | OWASP Top 10     | —               | OWASP ZAP          |
+{/* Mỗi TC ở §13.2 phải gán đúng 1 level. Chọn level rẻ nhất vẫn chứng minh được TC đó. Không ghi tên framework/tool vào SD — đó là việc của dev. */}
+
+Every TC in §13.2 carries exactly one level. A level is defined by the kind of infrastructure the TC needs in order to be proven.
+
+| Level   | Infrastructure the TC needs                                                              |
+|---------|------------------------------------------------------------------------------------------|
+| `unit`  | Nothing external. Pure logic; every collaborator is replaced by a test double.           |
+| `slice` | One framework layer wired up (e.g. request mapping, validation, serialization, security filter chain) with collaborators replaced. No real datastore or broker. |
+| `it`    | Real infrastructure of the kind the TC is about (real datastore, broker, lock), started locally for the test. |
+| `live`  | A deployed system: several services running together, or environment-specific configuration. |
+
+**Principle: cheapest level that can prove it.** Pick the lowest level at which the TC can still fail for the right reason. Moving up a level costs speed and stability, so a TC goes up only when a lower level cannot prove it.
+
+**`it` is allowed only when the TC is about one of these:**
+
+- Query, repository, index or lock behavior — the result depends on how the datastore actually executes it.
+- Money flow — hold, debit, refund; idempotency; concurrent requests on the same resource.
+- Consumer or producer behavior against an event contract (message shape, ordering, redelivery).
+- Security wiring — one case per rule type (e.g. authenticated vs. role-restricted vs. public), not one per endpoint.
+- Schema migration — applying the migration to a real datastore.
+
+Anything else stays at `unit` or `slice`.
+
+**`live`** is reserved for what only a deployed system can show: a cross-service flow, or behavior that depends on environment configuration.
 
 ### 13.2 Test Cases (Critical)
 
-{/* Liệt kê test cases quan trọng. Nhóm theo flow / concern. */}
+{/* Liệt kê test cases quan trọng. Nhóm theo flow / concern. Cột Level: một trong unit | slice | it | live (xem §13.1). */}
 
-| ID     | Flow                        | Test Case                               | Expected Result               |
-|--------|-----------------------------|-----------------------------------------|-------------------------------|
-| TC-001 | [Flow chính]                | Happy path — valid input                | [Expected]                    |
-| TC-002 | [Flow chính]                | Validation error                        | [Expected]                    |
-| TC-003 | [Business rule]             | [Rule X triggered]                      | [Expected]                    |
-| TC-004 | [Edge case]                 | [Mô tả edge case]                       | [Expected]                    |
-| TC-005 | [Concurrency]               | Multiple concurrent requests            | No data corruption            |
-| TC-006 | [Failure / Recovery]        | [Dependency down / crash mid-process]   | [Expected recovery behavior]  |
-| TC-007 | [Idempotency]               | Same request twice                      | No duplicate side effects     |
+| ID     | Flow                        | Test Case                               | Expected Result               | Level |
+|--------|-----------------------------|-----------------------------------------|-------------------------------|-------|
+| TC-001 | [Flow chính]                | Happy path — valid input                | [Expected]                    | slice |
+| TC-002 | [Flow chính]                | Validation error                        | [Expected]                    | slice |
+| TC-003 | [Business rule]             | [Rule X triggered]                      | [Expected]                    | unit  |
+| TC-004 | [Edge case]                 | [Mô tả edge case]                       | [Expected]                    | unit  |
+| TC-005 | [Concurrency]               | Multiple concurrent requests            | No data corruption            | it    |
+| TC-006 | [Failure / Recovery]        | [Dependency down / crash mid-process]   | [Expected recovery behavior]  | it    |
+| TC-007 | [Idempotency]               | Same request twice                      | No duplicate side effects     | it    |
 
 ---
 
