@@ -182,7 +182,22 @@ const commands = {
     // `## 9. API Design`, which the stricter form missed (it only matched via the
     // `### 9.2 API Endpoints` subsection) — an SD with §9 but no §9.x subsection
     // silently classified as `internal` and got the live-e2e scaffold.
-    const hasApiSection = /^#{2,3}\s*9(\.\d+)?\.?\s+API/im.test(sdText);
+    const apiHeading = sdText.match(/^#{2,3}\s*9(\.\d+)?\.?\s+API.*$/im);
+    let hasApiSection = !!apiHeading;
+    if (hasApiSection) {
+      // The template keeps the `## 9. API Design` heading even for a feature with no
+      // HTTP endpoint, with a body like "Không áp dụng — internal CLI engine". Counting
+      // that heading alone overrode an explicit `Design type: **internal**` and scaffolded
+      // a fake `GET /api/v1/TODO` stub per test. A §9 whose body says it does not apply is
+      // not an API section.
+      const afterApi = sdText.slice(sdText.indexOf(apiHeading[0]) + apiHeading[0].length);
+      const nextHeading = afterApi.search(/^#{2,3}\s+\S/m);
+      const apiBody = (nextHeading >= 0 ? afterApi.slice(0, nextHeading) : afterApi);
+      const apiBodyAscii = String(apiBody).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/gi, 'd').toLowerCase();
+      if (/\bn\/a\b|not applicable|\bkhong ap dung\b|\bno (new )?(http )?(endpoint|api)/.test(apiBodyAscii.trim().slice(0, 200))) {
+        hasApiSection = false;
+      }
+    }
     const designType = String(args.type || (dtMatch && dtMatch[1]) || (hasApiSection ? 'api' : 'internal')).trim().toLowerCase();
     const httpSurface = designType === 'api' || designType === 'hybrid' || hasApiSection;
     const q = (s) => '"' + String(s || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
@@ -221,6 +236,14 @@ const commands = {
     // routing) rather than re-deriving it here.
     // --auth overrides detection; any detection failure falls back to 'unknown'.
     const genWarnings = [];
+    // IT budget (test-level-discipline FR-009): same shared check trace-build uses.
+    // No Level column -> hasLevel false -> nothing counted, nothing warned (FR-019).
+    // The same levels map drives the no-verify emission for `it` TCs below (FR-011).
+    const tcLv = trace.parseTcLevels(tc, resolveCols(tc, SD_COLS.tc).id);
+    {
+      const budgetWarn = tcLv.hasLevel ? trace.itBudgetWarning(tcLv.levels, readJsonSafe(PATHS.config, {})) : null;
+      if (budgetWarn) genWarnings.push(budgetWarn);
+    }
     let authType = String(args.auth || '').trim().toLowerCase();
     if (!authType) {
       // Multi-repo hub: detect-auth.sh's own hub-reconciliation classifies EVERY
@@ -368,11 +391,19 @@ const commands = {
       // `Edge:` naming convention (most of them) produced an all-smoke checklist.
       // Rule: the FIRST non-edge TC of each flow is that flow's smoke test; every
       // other TC — edge or not — is regression. One smoke test per user story.
+      // A Level `it` TC is proven by an integration test, not curl-able: it is emitted
+      // as no-verify and never takes the smoke slot (FR-011) — the smoke test is the
+      // first non-edge TC that is NOT `it`. SDs without a Level column have no `it` TCs.
       const tests = byFlow[flow];
-      const smokeIdx = tests.findIndex(t => !t.isEdge);
+      const isIt = (t) => tcLv.hasLevel && tcLv.levels[String(t.tcId || '').trim()] === 'it';
+      const smokeIdx = tests.findIndex(t => !t.isEdge && !isIt(t));
+      const suiteTags = [];
+      if (smokeIdx >= 0) suiteTags.push('smoke');
+      if (tests.some((t, ti) => ti !== smokeIdx && !isIt(t))) suiteTags.push('regression');
+      if (suiteTags.length === 0) suiteTags.push('no-verify');
       L.push(`  - id: suite-${s}`);
       L.push(`    name: ${q(flow)}`);
-      L.push(`    tags: [${smokeIdx >= 0 && tests.length > 1 ? 'smoke, regression' : smokeIdx >= 0 ? 'smoke' : 'regression'}]`);
+      L.push(`    tags: [${suiteTags.join(', ')}]`);
       L.push('    tests:');
       for (let ti = 0; ti < tests.length; ti++) {
         const t = tests[ti];
@@ -383,7 +414,13 @@ const commands = {
         const expTxt = String(t.expected || '').replace(/\s+/g, ' ').trim().slice(0, 110) || '(see SD §13.2)';
         L.push(`      - id: ${t.tcId}`);
         L.push(`        name: ${q(t.testCase)}`);
-        if (httpSurface) {
+        if (isIt(t)) {
+          // No request/expect scaffold: checklist-status and lint-checklist classify the
+          // test as no-verify from this tags list, so it never counts as a TODO stub.
+          L.push('        tags: [no-verify]');
+          L.push(`        # SD Expected Result: ${expTxt}`);
+          L.push('        # proven by IT (Level: it) — retag regression to also check it live');
+        } else if (httpSurface) {
           L.push(`        tags: [${tag}]`);
           L.push(`        # SD Expected Result: ${expTxt}`);
           L.push('        request:    # method/path/token from SD §9.2 (event-driven: §10) — GET for read/masking, POST/PUT/DELETE if mutating');
