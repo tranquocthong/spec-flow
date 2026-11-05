@@ -2,7 +2,7 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
-## [Unreleased]
+## [0.17.0] — 2026-11-05
 
 ### Changed
 
