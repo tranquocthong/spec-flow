@@ -32,6 +32,33 @@ Author all **free prose** in that language (e.g. `vi` → Vietnamese): the §1 O
 
 So a Vietnamese SD reads: English skeleton (headers/IDs/structure) + Vietnamese prose in the cells and narrative. Readable for the team AND machine-parseable.
 
+## DETAIL LEVEL (lean by default)
+
+Read the level from the draft's first blockquote (`Detail: **lean**` or `Detail: **full**`); a `SD detail: <level>` line in your spawn prompt overrides it. No marker at all → the SD predates lean: treat it as `full`.
+
+The SD has two kinds of reader: the machine and implementer path (engine, `hybrid-executor`, the pre-ship reviewer, `/sf:change`, `/sf:resync`, `/sf:bug`), and a human reader. A **lean** SD keeps everything the first path reads and drops what only the second reads. Every line you write is output tokens now and input tokens on every later read, so do not add a section a lean SD omits.
+
+| Section | lean | full |
+| --- | --- | --- |
+| §1 Overview | design type + 2-3 sentence summary | 3-5 sentences + change type |
+| §2 Background (2.1-2.3) | omit | write |
+| §3.1 Goals | omit (§5.1 is the goal list) | write |
+| §3.2 Non-Goals | write | write |
+| §5.1, §5.2, §12.2, §13.2 | write (unchanged rules) | write |
+| §6.1 component diagram | omit | write |
+| §6.2 component table | only components this feature adds or changes | write |
+| §6.3 decisions | one line each, see F | full record, see F |
+| §7, §9.2, §10.x | when they apply (unchanged rules) | same |
+| §9.4 / §10.8 sequence diagrams | adaptive rule in D (the executor reads them) | same |
+| §12.1, §12.3-12.5 | only feature-specific values, never generic boilerplate | same |
+| §15 Open Questions | only when a question is still open | write |
+| Revision history, glossary | omit | keep Pass-1 rows |
+| Pass-2 summary | in your reply only, not in the file | appendix comment |
+
+In §9.2, give each request and response schema once: a field table, or a JSON sample, not both.
+
+Switching level is the user's call. In `/sf:resync` or `/sf:change`, keep the level of the SD you are editing; add the full-only sections only when you are told the SD is now `full`, and then update the preamble marker to `Detail: **full**`.
+
 ## Inputs
 - **Raw SRS file path** — read in full, regardless of shape (free-form markdown, Vietnamese or English).
 - **SD draft path** — Pass-1 output with deterministic content + `TODO:MANUAL-REVIEW` markers.
@@ -61,7 +88,7 @@ Link each TC to its FR row and update `TC-xxx` IDs sequentially.
 
 The final §13.2 table has 7 columns, in this order: `| TC ID | Flow | Test Case | Input / Condition | Expected Result | FR | Level |`. Pass-1 emits a shorter table whose last column is `Level`; when you expand it, keep `Level` as the LAST column.
 
-**Assign a `Level` to every TC** (the last column of the §13.2 table). The policy — what each level means and when `it` is allowed — is defined in `templates/sd-template.md` §13.1; refer to it, do not restate or rewrite it in the SD. Rules:
+**Assign a `Level` to every TC** (the last column of the §13.2 table). The rules below are the complete policy (it is also written out in `templates/sd-template.md` §13.1 for human readers; you do not need to open that file). Do not restate the policy in the SD. Rules:
 - **Cheapest level that can prove the TC** (`unit` < `slice` < `it` < `live`). Pick the lowest level at which the TC can still fail for the right reason.
 - `unit` — validation, mapping, label, error code, display. Pure logic, no wiring.
 - `slice` — needs routing/middleware (request mapping, serialization, security filter) but no real infrastructure.
@@ -82,8 +109,8 @@ For each failure path from step B, ensure a §12.2 row exists:
 ### D. Fill reasoning sections (your primary creative output)
 
 **§6 Architecture Overview**
-- `§6.1`: Mermaid `graph TB` of components/actors from the SRS sequence diagram (or §5.1 user journey). Label edges with protocol (REST, Kafka, DB).
-- `§6.2`: Component table (Component | Role | Technology).
+- `§6.1` (full only): Mermaid `graph TB` of components/actors from the SRS sequence diagram (or §5.1 user journey). Label edges with protocol (REST, Kafka, DB).
+- `§6.2`: Component table (Component | Role | Technology). Lean: only the components this feature adds or changes; on a multi-repo project, label each with its service.
 
 **§9.4 / §10.8 Sequence Diagrams** — **adaptive, not mandatory.** Draw one only for a flow that genuinely needs ordering made explicit: ≥3 participant hops, OR an async/callback/retry/saga step, OR an error branch that changes the call sequence. **Skip for simple single-shot CRUD / read / transform flows** — there the FR + §13.2 TC + §9.2 endpoint table already carry the full contract, and a diagram is redundant ceremony. When you do draw one: Mermaid `sequenceDiagram` with `autonumber`, include error/async `alt`/`loop` blocks, reference exact FR IDs in comments (`%% FR-003`). The diagram is for human review + a downstream implementer of multi-step tasks — so any fact it shows (a status code, an error path, a field) MUST also live in the FR/TC/§9.2/§12.2 rows, never only in the diagram (the per-task implementer trace-links to those rows, not to the diagram).
 
@@ -95,13 +122,13 @@ For each failure path from step B, ensure a §12.2 row exists:
 - Map SRS §5.2 screen fields (Label → field name, InputType, Mandatory=Yes → `required: true`).
 - Add validation rules from BL-xx guards (e.g. BL-03: amount > 0 → `minimum: 0.01`).
 
-**§2 Background & §1 Overview** (if still `TODO:MANUAL-REVIEW`)
-- Write 3–5 sentence summary from SRS §1 scope + §5.1 user journey.
-- §2.1 Context, §2.2 Problem, §2.3 Proposed Solution — concise, grounded in the SRS.
+**§1 Overview & §2 Background** (if still `TODO:MANUAL-REVIEW`)
+- §1: lean → a 2-3 sentence summary of what this builds and why; full → 3–5 sentences from SRS §1 scope + §5.1 user journey.
+- §2.1 Context, §2.2 Problem, §2.3 Proposed Solution (full only) — concise, grounded in the SRS.
 
 ### E. Fill §3.1 Goals and §3.2 Non-Goals
 
-**§3.1 Goals** — verify the skeleton's derived bullets match the SRS scope. Rewrite vague ones to be concrete and outcome-oriented ("System masks PII fields for PARTNER callers", not "Implement masking").
+**§3.1 Goals** (full only) — verify the skeleton's derived bullets match the SRS scope. Rewrite vague ones to be concrete and outcome-oriented ("System masks PII fields for PARTNER callers", not "Implement masking").
 
 **§3.2 Non-Goals** — CRITICAL. Derive from: SRS §3 explicit exclusions, deferred items, or boundaries implied by what IS in scope. List each out-of-scope behavior as a concrete bullet ("Merchant surfaces — deferred to separate initiative", "Admin role is not masked — PARTNER-only"). A SD with an empty §3.2 is a red flag: every real feature has something it deliberately does not do. If the SRS states no exclusions, reason from scope boundaries yourself. This section is the primary defense against scope creep and the first check in `/sf:change` triage.
 
@@ -112,6 +139,8 @@ After §6.2 Component Description, add a `### 6.3 Architecture Decisions` sub-se
 > **D{n}: {title}** — {chosen approach}. Rationale: {why this, not an alternative}. Tradeoff accepted: {what we give up}.
 
 Add a decision when: choosing between two approaches, making an integration assumption, deciding error behavior (fail-closed vs open), deferring a concern to a later initiative, or reusing vs creating a component. A feature with zero decisions is a red flag — it means the design wasn't reasoned. Typical range: 3–7 decisions per feature. These records are permanent — they explain the SD to future readers and inform `/sf:change` impact assessment.
+
+**Lean:** one line per decision, `- **D{n}: {title}** — {chosen approach}, because {reason}.` Add the tradeoff only when the implementer or the reviewer would otherwise get it wrong. Record only decisions that change what gets built or how a reviewer judges it; no minimum count, but a lean SD with zero decisions is still a red flag.
 
 ### G. Leave `TODO:MANUAL-REVIEW` only where genuinely ambiguous
 Keep the marker for: a screen field with no clear API mapping, contradictory SRS state transitions, a BL rule with no specified edge-case behavior.
@@ -138,7 +167,7 @@ Remove and fill: an error code whose trigger is stated in a BL rule; an architec
 
 ## Output
 1. Edited SD file (all Pass-1 placeholders resolved except genuinely ambiguous ones).
-2. Appendix comment at the end of the SD (do not create a separate file):
+2. The Pass-2 summary below. **Lean:** put it in your reply to the orchestrator, not in the SD (every later read of the SD would pay for it). **Full:** append it as a comment at the end of the SD (do not create a separate file):
    ```
    <!-- sd-author Pass-2 summary:
      - FR rows merged/dropped: <list>
@@ -147,4 +176,4 @@ Remove and fill: an error code whose trigger is stated in a BL rule; an architec
      - TODO:MANUAL-REVIEW remaining: <count> — reasons: <list>
    -->
    ```
-   Machine-readable by `/sf:ingest` step 8 (TODO count gate).
+   The step 8 gate counts the bold markers in the SD itself, so the summary is a report, not an input.

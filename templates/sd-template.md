@@ -16,6 +16,8 @@
 
 ## Revision History
 
+{/* full only — omitted from a lean SD (the default). */}
+
 | Version | Date       | Author | Changes                    |
 |---------|------------|--------|----------------------------|
 | 1.0.0   | YYYY-MM-DD | [Tên]  | Initial draft              |
@@ -30,6 +32,15 @@
 > spec-flow and 1,496 times across already-shipped SDs, and the number-based
 > cross-checks in `lib/trace.cjs` (§5.1, §5.2, §10.4, §12.2, §13.2) key on them.
 > Renumbering would buy tidiness and cost 1,833 references. Do not renumber.
+
+> **Detail levels: `lean` (default) and `full`.** A lean SD keeps every section the
+> engine, the executor and the pre-ship reviewer read (§1 summary, §3.2, §5, §6.2,
+> §6.3 as one-liners, §7, §9, §10, §12.2, §13.2) and leaves out what only a human
+> reads: §2, §3.1, §3.3, §6.1, Revision History, Glossary, and §15 when nothing is
+> open. Measured on 292 shipped SDs, those sections were ~20% of every SD, paid on
+> every read in the automated flow. Ask for `full` (`/sf:ingest --full`, or
+> `sd.detail: "full"` in `.spec-flow/config.json`) when the SD is also a document
+> for people. Sections below marked "full only" are skipped in a lean SD.
 
 ## 1. Overview
 
@@ -60,6 +71,8 @@
 
 ## 2. Background & Problem Statement
 
+{/* full only — omitted from a lean SD (the default). */}
+
 ### 2.1 Bối cảnh (Context)
 
 {/* Mô tả tình trạng hiện tại (As-Is). Hệ thống đang hoạt động như thế nào? */}
@@ -84,6 +97,8 @@
 
 ### 3.1 Goals (Trong phạm vi)
 
+{/* full only — omitted from a lean SD (the default). */}
+
 - [Mục tiêu 1 — cụ thể, đo lường được]
 - [Mục tiêu 2]
 - [Mục tiêu 3]
@@ -96,6 +111,8 @@
 - [Không làm: ...]
 
 ### 3.3 Success Criteria
+
+{/* full only — omitted from a lean SD (the default). */}
 
 {/* Làm thế nào để biết giải pháp này thành công? */}
 
@@ -136,6 +153,8 @@
 
 ### 6.1 High-Level Architecture
 
+{/* full only — omitted from a lean SD (the default). */}
+
 {/* Diagram tổng quan hệ thống — dùng Mermaid */}
 
 ```mermaid
@@ -169,6 +188,8 @@ graph TB
 | Message Queue | [Kafka / RMQ]   | [Async event processing]                    |
 
 ### 6.3 Các Thay Đổi So Với Hiện Tại
+
+{/* Lean SD: §6.3 holds the architecture decisions instead, one line each: `- **D1: <title>** — <choice>, because <reason>.` */}
 
 {/* Mô tả delta — những gì THAY ĐỔI so với hệ thống hiện tại */}
 
@@ -592,6 +613,8 @@ sequenceDiagram
 
 ### 12.1 Error Classification
 
+{/* §12.1 and §12.3-12.5: write only values specific to this feature. The generic tables below are examples; do not copy them into an SD. */}
+
 {/*
   Chọn bảng phù hợp với loại thiết kế. Hybrid giữ cả hai.
   Nếu có error codes riêng cho domain, thêm sub-section "Domain Error Codes" với bảng chi tiết.
@@ -713,6 +736,8 @@ Anything else stays at `unit` or `slice`.
 
 ## 15. Open Questions
 
+{/* Lean SD: include only while a question is still open. */}
+
 {/* Các câu hỏi chưa có quyết định, cần làm rõ trước khi implement */}
 
 | ID   | Question                                           | Status     | Decision By | Decision              |
@@ -726,6 +751,8 @@ Anything else stays at `unit` or `slice`.
 {/* Không mention code và internal files */}
 
 ## Appendix: Glossary
+
+{/* full only — omitted from a lean SD (the default). */}
 
 | Term     | Definition          |
 |----------|---------------------|

@@ -2,6 +2,15 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [0.17.0] — 2026-11-05
+
+### Changed
+
+- **SDs are lean by default.** Measured on 292 shipped SDs (about 14k tokens each), about 20% of every SD was written for a human reader only, and the automated flow paid for it on every read: sd-author's output, the pre-ship review, `/sf:change`, `/sf:resync`, `/sf:bug`. A lean SD keeps every section the engine, the executor and the reviewer read (§1 summary, §3.2 Non-Goals, §5, §6.2, §7, §9, §10, §12.2, §13.2) and leaves out §2 Background, §3.1 Goals, the §6.1 diagram, revision history and the glossary. §6.3 decisions become one line each, and sd-author returns its Pass-2 summary in its reply instead of writing it into the SD. `sd-skeleton` records the level in the SD preamble (`Detail: **lean**`).
+- **`full` is one flag away.** `/sf:ingest --full` (or `sd-skeleton --full` / `--detail full`) writes the previous full SD, and `sd.detail: "full"` in `.spec-flow/config.json` makes it the project default. `/sf:resync --force` keeps the level of the SD it re-harvests; an SD written before this change has no marker and is treated as full. `/sf:doctor` warns `WARN_SD_DETAIL_INVALID` on a bad `sd.detail`.
+
+A full SD is byte-identical to the previous Pass-1 output apart from the `Detail:` token, and a lean SD gives the same `trace-build`, `route` and `checklist-gen` results as a full one.
+
 ## [0.16.0] — 2026-11-03
 
 ### Added

@@ -1,6 +1,6 @@
 ---
 description: Ingest an approved SRS into a Solution Design (SD) draft + CONTEXT.md + tasks seed + traceability. Replaces manual "convert SRS to SD" prompting. No file / just an idea? Bare invocation interviews you and writes the SRS first (AI-elicited input beats hand-typed prose).
-argument-hint: "[<path/to/srs.md> | --idea \"<seed>\"] [--type api|internal|hybrid|auto] [--epic <slug>]"
+argument-hint: "[<path/to/srs.md> | --idea \"<seed>\"] [--type api|internal|hybrid|auto] [--epic <slug>] [--full]"
 allowed-tools: Read, Write, Edit, Bash, Agent
 ---
 
@@ -71,9 +71,11 @@ With a file path given, skip Mode 0 and go straight to the Steps.
 3. **Pass-1 — deterministic harvest**
    ```
    node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs sd-skeleton \
-     --srs <path> --type <type|auto> --out .spec-flow/specs/<feature>/SD.md
+     --srs <path> --type <type|auto> --out .spec-flow/specs/<feature>/SD.md [--full]
    ```
-   Fills revision history, glossary, §5.1 FR (MoSCoW from AC), §5.2 NFR, §12.2 error codes, §13.2 TC. Marks AI-needed sections `TODO:MANUAL-REVIEW`. Intentionally dirty — sd-author (Pass-2) is the intelligence layer.
+   Fills §5.1 FR (MoSCoW from AC), §5.2 NFR, §12.2 error codes, §13.2 TC (plus revision history and glossary in a full SD). Marks AI-needed sections `TODO:MANUAL-REVIEW`. Intentionally dirty — sd-author (Pass-2) is the intelligence layer.
+
+   **Detail level — lean unless the user asks for full.** A lean SD (the default) holds what the engine, the executor and the reviewer read, and leaves out the sections written only for a human reader (§2 Background, §3.1 Goals, §6.1 diagram, revision history, glossary, long decision records). Pass `--full` only when `$ARGUMENTS` has `--full` or the user asks for a full / leader-review / documentation SD in words ("SD đầy đủ", "để leader review", "full SD"). `config.json → sd.detail: "full"` makes full the project default. An auto-mode or "save tokens" request never needs a flag: lean is already the default. The result's `stats.detail` is the level used.
 
    Check `data.warnings` in the result: if `epicScale: true`, surface the warning to the user and note the two options — (a) split into sub-feature SDs (each its own SD, linked via trace.json), or (b) have sd-author author section-by-section.
 
@@ -82,13 +84,14 @@ With a file path given, skip Mode 0 and go straight to the Steps.
    ```
    node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs status-report   # or grep "language" .spec-flow/config.json
    ```
-   Spawn **sd-author** with: SRS path + SD draft from step 3 + `CONTEXT.md` (if present) + `--type` **+ an explicit first line of the spawn prompt: `Author all SD/CONTEXT prose in language: <config.language>` (e.g. `vi`).** Pass this even though sd-author also reads `config.json` — surfacing it explicitly is what makes the language actually take effect (a buried rule the sub-agent may skip is not enough). If `config.language` is `en`, no directive needed. **Model:** read `config.json → models.sdAuthor`; if set to a non-null value, pass it as the Agent tool's `model` param. If absent/`null` (the default), omit the param — sd-author inherits the main session's model.
+   Spawn **sd-author** with: SRS path + SD draft from step 3 + `CONTEXT.md` (if present) + `--type` **+ an explicit first line of the spawn prompt: `Author all SD/CONTEXT prose in language: <config.language>` (e.g. `vi`).** Pass this even though sd-author also reads `config.json` — surfacing it explicitly is what makes the language actually take effect (a buried rule the sub-agent may skip is not enough). If `config.language` is `en`, no directive needed. Add a second line `SD detail: <stats.detail from step 3>`. **Model:** read `config.json → models.sdAuthor`; if set to a non-null value, pass it as the Agent tool's `model` param. If absent/`null` (the default), omit the param — sd-author inherits the main session's model.
 
    sd-author will:
    - Merge fragmented/list-intro FR rows into atomic requirements; drop non-requirements.
    - Derive TC rows from BL failure rules + corresponding §12.2 error codes.
    - Fill §6 Architecture, §9.4/§10.8 Sequence Diagrams, §10.4 State Management.
    - Leave `TODO:MANUAL-REVIEW` only where genuinely ambiguous.
+   - Lean SD: return its Pass-2 summary in its reply. Relay the summary to the user in step 8; do not write it into the SD.
 
 5. **Write CONTEXT.md**
    Extract locked decisions from SRS §4 AC + §5.1 User Journey. Feeds all downstream agents.
