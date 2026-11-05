@@ -39,7 +39,7 @@ If impact spans multiple nodes, or you're unsure, run the full steps below.
    Creates/switches `<type>/change-<NNN>-<slug>` when on the base branch (no-op if already on a work branch or `mode: off`). **Multi-repo (`config.repos` set):** append **`--repos "<service>,..."`** to scope the branch to the repos this change actually touches (else all configured repos branch). Unknown name → `REPO_NOT_CONFIGURED`.
 
 2. **Edit the SD spec**
-   Update the relevant SD section, or spawn **sd-author** to propose a diff.
+   Update the relevant SD section, or spawn **sd-author** to propose a diff. Keep the SD's detail level (the `Detail:` marker in its first blockquote; no marker means full): do not add §2, §3.1, §6.1, a glossary or revision rows to a lean SD unless the user asks for full.
    - Never patch code without patching SD first — SD is always the source of truth.
    - Mark edited rows/sections `TODO:MANUAL-REVIEW` for non-trivial changes; clear once approved.
    - `fix`: update the FR row or §12.2 error code. `enhance`: add a new FR row (next `FR-xxx` ID) + corresponding §13.2 TC row.

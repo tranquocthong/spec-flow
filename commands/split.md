@@ -91,6 +91,7 @@ For EACH approved sub-feature (run sequentially — each may be large):
 Spawn **sd-author** with:
 - Full SRS file path
 - Instruction: `"Produce the SD for ONLY the sub-feature '<sub-name>', covering FRs/US in scope: <scope>. Do not include requirements or design for the other sub-features. Output to .spec-flow/specs/<epic-slug>-<sub-slug>/SD.md."`
+- A line `SD detail: lean` (or `full` when the user asked for full SDs or `config.json → sd.detail` is `"full"`). Lean is the default, see `/sf:ingest` step 3.
 - Output path: `.spec-flow/specs/<epic-slug>-<sub-slug>/SD.md`
 
 **5b. Build traceability for that sub-feature:**
