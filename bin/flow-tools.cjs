@@ -21,7 +21,7 @@
 const fs = require('fs');
 const path = require('path');
 const {
-  STATE_DIR, PATHS, PLUGIN_ROOT, STATE_FILE, SKIP_SCAN_DIRS, SD_COLS, ok, err, parseArgs, readJsonSafe, traceFileFor, readTrace, hydrateTrace, resolveActiveFeature, stateFileFor, stateFeatureOf, shipFileFor, worktreeInfo, ensureDir, slugify, pad3, readTmTasks, fileLinksPathFor, resolveRepos, parseReposArg, langPack, kwRe, cleanHeading, parseHeadings, bodyOf, classifyHeading, findHeading, findTableByHeader, parseFirstTable, parseAllTables, splitRow, resolveCols, tableShapeWarnings, parseUserStories, trimOrNull, extractBulletsAfter, inferDesignType, parseSrs, parseProseBullets, TODO, countSdTodos, mdCell, moscowFor, genSd, readSdTables, scoreComplexity, routeFor, tcIdsForReq, resolveTemplate
+  STATE_DIR, PATHS, PLUGIN_ROOT, STATE_FILE, SKIP_SCAN_DIRS, SD_COLS, ok, err, parseArgs, readJsonSafe, traceFileFor, readTrace, hydrateTrace, resolveActiveFeature, stateFileFor, stateFeatureOf, shipFileFor, worktreeInfo, ensureDir, slugify, pad3, readTmTasks, fileLinksPathFor, resolveRepos, parseReposArg, langPack, kwRe, cleanHeading, parseHeadings, bodyOf, classifyHeading, findHeading, findTableByHeader, parseFirstTable, parseAllTables, splitRow, resolveCols, tableShapeWarnings, parseUserStories, trimOrNull, extractBulletsAfter, inferDesignType, parseSrs, parseProseBullets, TODO, countSdTodos, mdCell, moscowFor, genSd, SD_DETAILS, sdDetailOf, readSdTables, scoreComplexity, routeFor, tcIdsForReq, resolveTemplate
 } = require('../lib/core.cjs');
 const maintenance = require('../lib/maintenance.cjs');
 const backlog = require('../lib/backlog.cjs');
@@ -126,8 +126,25 @@ const commands = {
     let md; try { md = fs.readFileSync(src, 'utf8'); } catch (e) { return err(`READ_FAILED: ${e.message}`); }
     const srs = parseSrs(md);
     const feature = args.feature || slugify(srs.featureName || path.basename(src, path.extname(src)));
-    const { sd, stats, warnings } = genSd(srs, { type: args.type, feature });
     const outPath = args.out || path.join(PATHS.specs, feature, 'SD.md');
+    // Detail level: --detail / --full > the level of the SD being re-harvested
+    // (/sf:resync --force must not flip it) > config.sd.detail > lean.
+    // An existing SD with no recorded level predates lean, so it was full.
+    if (args.detail != null && !SD_DETAILS.includes(args.detail)) {
+      return err(`INVALID_DETAIL: --detail must be one of ${SD_DETAILS.join('|')}, got "${args.detail}"`);
+    }
+    let detail = args.full ? 'full' : args.detail;
+    let detailFrom = detail ? 'flag' : null;
+    if (!detail && fs.existsSync(outPath)) {
+      try { detail = sdDetailOf(fs.readFileSync(outPath, 'utf8')) || 'full'; detailFrom = 'existing-sd'; } catch (_) { /* fall through */ }
+    }
+    if (!detail) {
+      const cfgDetail = ((readJsonSafe(PATHS.config, {}) || {}).sd || {}).detail;
+      if (SD_DETAILS.includes(cfgDetail)) { detail = cfgDetail; detailFrom = 'config'; }
+    }
+    if (!detail) { detail = 'lean'; detailFrom = 'default'; }
+    const { sd, stats, warnings } = genSd(srs, { type: args.type, feature, detail });
+    stats.detailFrom = detailFrom;
     if (args['dry-run']) return ok({ feature, stats, warnings, preview: sd.slice(0, 1200) + '\n...[truncated]' });
     // Clobber guard: a fresh harvest would overwrite an SD that sd-author/human
     // already cleaned (e.g. re-running /sf:ingest after a mid-ingest exit). On
