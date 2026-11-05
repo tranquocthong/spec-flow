@@ -180,6 +180,8 @@ Everything policy-shaped lives as data in `.spec-flow/config.json`, seeded by `/
 
 **Language.** `language: "vi"` makes the agent reply and author SD prose in Vietnamese. Code, identifiers, commit messages, section headings and FR/TC ids stay English. SRS harvesting understands English and Vietnamese keyword packs.
 
+**SD detail.** `sd.detail` is `"lean"` (the default) or `"full"`. A lean SD keeps what the engine, the executor and the reviewer read and leaves out the sections written only for a human reader: §2 Background, §3.1 Goals, the §6.1 diagram, revision history, the glossary, and long decision records (about 20% of an SD, measured on 292 shipped ones). Use `"full"`, or `/sf:ingest --full` for one feature, when the SD is also a document a leader or another team reads. `/sf:resync` and `/sf:change` keep the level an SD was written at; an SD written before this setting existed counts as full.
+
 **Phase.** `phase.confirmTasks` asks before seeding tasks. `phase.taskNotes` turns on per-task AI progress notes (off by default, they cost one AI call per task).
 
 **Evolving the authoring rules.** When `sd-author` learns a reusable team convention, it is appended to `project-author.md` with a timestamp:
