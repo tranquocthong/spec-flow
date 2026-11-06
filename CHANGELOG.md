@@ -2,6 +2,14 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [0.17.1] — 2026-11-07
+
+### Fixed
+
+- **Project rules under `## Code review checklist` were never enforced.** The v0.13.0 rules gate only looked for `## Code Rules`. Projects created before v0.13.0 got a template whose only rules section was `## Code review checklist (project-owned)`, and it told them to add their stack's anti-patterns there. On those projects the executor got zero rules, so no compliance table was expected, and the gate passed without checking anything. Found when a new endpoint wrapped its response in `ResponseEntity` against an explicit project rule.
+- **The rules now come from the engine, not from a heading the LLM has to find.** New `code-rules-list` returns every rule from `## Code Rules` and `## Code review checklist ...` with ids `R1..Rn`. `/sf:phase` step 2 and `/sf:bug` STEP 4a paste that list into the executor prompt, and `review-scope` returns it as `codeRules` for the reviewer. In the executor's compliance table, every `pass` must name the file or symbol that was checked, and copying the pattern of neighbouring code does not count as compliance.
+- **`/sf:doctor` reports the rules it sees** (`project-rules`) and warns `RULES_REVIEWER_OFF` when rules exist but `phase.codeReview` is off. In that case the executor's self-check is the only thing that enforces them. `code-rules-list` returns the same warning.
+
 ## [0.17.0] — 2026-11-05
 
 ### Changed

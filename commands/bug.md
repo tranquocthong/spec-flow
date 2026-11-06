@@ -106,7 +106,7 @@ Spawn **hybrid-executor** with:
 
 **No SD?** Substitute the contract: replace "MATCH SD section `<ref>`" with "match the **expected behavior** in the bug report (expected/actual) + the failing repro test"; drop the "Impacted nodes" line. Everything else (do-not-touch-other-behavior, minimal diff, RED→GREEN→REFACTOR) stays.
 
-**`## Code Rules` are binding here too — a bug fix is not exempt.** Before spawning, extract the bullets under `## Code Rules` in `.spec-flow/project-author.md` (if any) and paste them **verbatim** into the executor prompt, the same as `/sf:phase` step 2. When there is ≥1 bullet, the executor's summary must carry the `Rule | Status | Notes` compliance table: missing table, a bullet with no row, or any row `violated` → send it back, do not go to STEP 5. Zero bullets → no table expected. **Model:** `config.json → models.hybridExecutor`; non-null → pass as the Agent `model` param, else omit.
+**`## Code Rules` are binding here too — a bug fix is not exempt.** Before spawning, run `node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs code-rules-list` and paste every returned rule **verbatim** into the executor prompt, the same as `/sf:phase` step 2 (it covers `## Code Rules` and the older `## Code review checklist` heading — never pick bullets by hand). When there is ≥1 rule, the executor's summary must carry the `Rule | Status | Notes` compliance table: missing table, a rule with no row, or any row `violated` → send it back, do not go to STEP 5. Zero rules → no table expected. **Model:** `config.json → models.hybridExecutor`; non-null → pass as the Agent `model` param, else omit.
 
 Log the fix attempt in "## Resolution log:" with a timestamp and summary of changes (note RED→GREEN→REFACTOR if a unit test was used).
 
