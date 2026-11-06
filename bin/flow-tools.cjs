@@ -11,7 +11,7 @@
  *
  * Commands: init, srs-snapshot, sd-skeleton, route, checklist-gen, trace-build, trace-impact,
  *           trace-repos, trace-link, srs-diff, state-update, worktree-info, verify-collect, verify-code, wave-plan,
- *           review-scope, review-collect, review-accept,
+ *           review-scope, review-collect, review-accept, code-rules-list,
  *           task-baseline, taskmaster-model-plan, taskmaster-model-check,
  *           epic-new, epic-attach, epic-list, epic-show, bug-new, bug-list, branch-ensure,
  *           backlog-new, backlog-list, backlog-set,
