@@ -2,6 +2,14 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [Unreleased]
+
+### Fixed
+
+- **Engine output above 64 KB was cut when read through a pipe.** `flow-tools.cjs` and `bin/task-master` called `process.exit` right after an async stdout write, so a caller reading through a pipe (an agent's Bash tool) got truncated JSON. That covers a large `sd-slice`, and a `parse-prd` GenerationSpec, which carries the whole SD (220 KB on a real 1,400-line SD, cut to 128 KB). Both now exit after stdout drains.
+- **`WARN_TESTCOMMAND_EMPTY` guessed the wrong tool on a polyglot root.** A root with `go.mod` next to a JS workspace `package.json` got `npm test` suggested. Doctor now lists every build tool it finds, puts first the one `config.stack` names (a free-form label such as `go-connectrpc+nextjs` counts), and names the others in the fix.
+- **`sd-slice` reported known FRs as missing.** A trace link stored with a comma list (`trace-link --fr "FR-084,FR-001"`) was read as one id, so the slice warned `IDS_NOT_IN_SD` for FRs the SD does have, and dropped their TCs. The ids are now split.
+
 ## [0.18.0] — 2026-11-07
 
 Cuts the repeated cost a field report measured on a 10-task Go phase (each executor re-reading a 1,200-1,700-line SD, the test suite running twice per task, a verify gate that never ran).

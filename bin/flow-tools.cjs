@@ -1051,7 +1051,9 @@ const commands = {
       const raw = readTrace(feature);
       const tr = raw ? hydrateTrace(feature, raw) : null;
       const links = (tr && tr.links) || [];
-      const linked = links.filter((l) => l.type === 'fr-task' && String(l.to) === parentId).map((l) => String(l.from).toUpperCase());
+      // A link's `from` can hold several ids in one string ("FR-084,FR-001") when
+      // trace-link was given a comma list for --fr — split it, never trust it raw.
+      const linked = links.filter((l) => l.type === 'fr-task' && String(l.to) === parentId).flatMap((l) => sdSlice.idsFromText(l.from));
       if (linked.length) via.push('trace fr-task');
       linked.forEach((i) => ids.add(i));
       const frs = [...ids].filter((i) => i.startsWith('FR-'));
@@ -2509,7 +2511,10 @@ function main() {
   if (!cmd) result = err('NO_COMMAND: usage: flow-tools.cjs <command> [--key value]');
   else if (!commands[cmd]) result = err(`UNKNOWN_COMMAND: ${cmd}`);
   else { try { result = commands[cmd](args); } catch (e) { result = err(`INTERNAL: ${e && e.message ? e.message : String(e)}`); } }
-  process.stdout.write(JSON.stringify(result) + '\n');
-  process.exit(result.ok ? 0 : 1);
+  // Exit only once the write has drained. stdout to a PIPE is async in Node:
+  // exiting right after write() cut every result above 64 KB (a pipe buffer)
+  // mid-JSON, which is exactly how an agent's Bash tool reads this engine.
+  const code = result.ok ? 0 : 1;
+  process.stdout.write(JSON.stringify(result) + '\n', () => process.exit(code));
 }
 main();
