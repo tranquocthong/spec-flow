@@ -17,9 +17,15 @@ const { runCli } = require('../lib/cli-dispatcher.cjs');
 
 runCli(process.argv.slice(2))
   .then(({ stdout, stderr, exitCode }) => {
-    if (stdout) process.stdout.write(stdout);
-    if (stderr) process.stderr.write(stderr + (stderr.endsWith('\n') ? '' : '\n'));
-    process.exit(exitCode);
+    // Exit only after both streams drained: to a pipe, stdout is async, and an
+    // immediate process.exit cut anything above 64 KB mid-JSON (a parse-prd
+    // GenerationSpec carries the whole SD, written earlier by ai-router). The
+    // write callback fires after every write queued before it, so writing ''
+    // still waits for those.
+    const out = (stream, text) => new Promise((resolve) => stream.write(text || '', resolve));
+    return out(process.stdout, stdout)
+      .then(() => out(process.stderr, stderr ? stderr + (stderr.endsWith('\n') ? '' : '\n') : ''))
+      .then(() => process.exit(exitCode));
   })
   .catch((err) => {
     // Defensive: runCli should not throw, but guard at the process boundary

@@ -151,3 +151,32 @@ test('doctor: multi-repo — a repo with no effective testCommand is named, a re
   assert.match(hits[0].detail, /config\.repos\["svc-a"\].*detected go/);
   assert.match(hits[0].fix, /config\.repos\["svc-a"\] = \{ "path": "svc-a", "verify": \{ "testCommand": "go test \.\/\.\.\." \} \}/);
 });
+
+test('doctor: polyglot root (go.mod + package.json) ranks the stack config.stack names first and lists the other', () => {
+  const polyglot = (d) => {
+    fs.writeFileSync(path.join(d, 'go.mod'), 'module x\n');
+    fs.writeFileSync(path.join(d, 'package.json'), '{}\n');
+  };
+  // Field case: config.stack is a free-form label naming Go first.
+  const named = withCode(doctorIn(polyglot, { verify: { testCommand: null } }, {}), 'WARN_TESTCOMMAND_EMPTY');
+  assert.equal(named.length, 1);
+  assert.match(named[0].detail, /detected node \+ go/);
+  assert.match(named[0].fix, /go: "go test \.\/\.\.\."/, 'no hint → node first, go still listed');
+
+  const prev = process.cwd();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sf-level-doctor-'));
+  try {
+    process.chdir(dir);
+    polyglot(dir);
+    maintenance['init-project']({});
+    const cfg = JSON.parse(fs.readFileSync('.spec-flow/config.json', 'utf8'));
+    cfg.verify.testCommand = null;
+    cfg.stack = 'go-connectrpc+nextjs+react-native';
+    fs.writeFileSync('.spec-flow/config.json', JSON.stringify(cfg));
+    const hits = withCode(maintenance.doctor({}).data.checks, 'WARN_TESTCOMMAND_EMPTY');
+    assert.match(hits[0].fix, /config\.verify\.testCommand = "go test \.\/\.\.\."/, 'the stack config.stack names comes first');
+    assert.match(hits[0].fix, /node: "npm test"/);
+  } finally {
+    process.chdir(prev);
+  }
+});
