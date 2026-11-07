@@ -2,6 +2,21 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [0.18.0] — 2026-11-07
+
+Cuts the repeated cost a field report measured on a 10-task Go phase (each executor re-reading a 1,200-1,700-line SD, the test suite running twice per task, a verify gate that never ran).
+
+### Added
+
+- **`sd-slice`: executors get the part of the SD their task covers, not the whole file.** It takes the FR/TC ids named in the task text and the trace links, then keeps those FR rows, the TC rows that cite them, the error codes those rows name, and any endpoint or table block that names them, all verbatim. It adds a line-numbered outline of the SD, so the executor can open a sequence diagram or the data model by line range. `/sf:phase` step 2 and `/sf:bug` STEP 4a paste it into the executor prompt. On this repo's own SD the cut is 373 lines down to about 60 per task. An id the task names but the SD lacks is warned (`IDS_NOT_IN_SD`).
+- **Known analogs carry between executors.** The executor reports the files it mirrored (`Analogs:`), and `/sf:phase` hands them to the next executor so it does not re-survey the codebase.
+- **`/sf:doctor` warns `WARN_TESTCOMMAND_EMPTY`** when the project (or a `config.repos` entry) has no `testCommand`. Until now `verify-code` then skipped tests on every task and `/sf:phase` said so once. When it detects the build tool, the warning names the command to set. Typical cause: `/sf:init` ran in a hub or a directory with no build file at its root.
+
+### Changed
+
+- **`verify-code --task` / `--files` scope Go tests.** A plain `go test [flags] ./...` becomes `go test [flags] <the task's packages>`, taken from its `_test.go` files. Wrapped commands (make, scripts, anything with shell operators) are never rewritten and still run the full suite.
+- **`/sf:phase` and the executor forbid a second, hand-run test pass.** `verify-code` is the per-task test run, and the full suite runs once at close-out. A parallel batch whose tasks' tests share one database, broker or port runs sequentially, unless at most one of them needs it.
+
 ## [0.17.1] — 2026-11-07
 
 ### Fixed

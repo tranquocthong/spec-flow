@@ -10,7 +10,7 @@
  * Usage:  node flow-tools.cjs <command> [--key value ...]
  *
  * Commands: init, srs-snapshot, sd-skeleton, route, checklist-gen, trace-build, trace-impact,
- *           trace-repos, trace-link, srs-diff, state-update, worktree-info, verify-collect, verify-code, wave-plan,
+ *           trace-repos, trace-link, srs-diff, state-update, worktree-info, verify-collect, verify-code, wave-plan, sd-slice,
  *           review-scope, review-collect, review-accept, code-rules-list,
  *           task-baseline, taskmaster-model-plan, taskmaster-model-check,
  *           epic-new, epic-attach, epic-list, epic-show, bug-new, bug-list, branch-ensure,
@@ -35,6 +35,7 @@ const trace = require('../lib/trace.cjs');
 const verify = require('../lib/verify.cjs');
 const review = require('../lib/review.cjs');
 const taskCli = require('../lib/task-cli.cjs');
+const sdSlice = require('../lib/sd-slice.cjs');
 
 // =====================================================================
 //  COMMANDS (workflow). Static commands live in lib/maintenance.cjs; the
@@ -1016,6 +1017,81 @@ const commands = {
   // also use it as a correctness check before working tasks concurrently.
   // Returns ok({ ready:[{id,title,deps}], readyCount, blockedCount, inProgressCount, doneCount, total, max }).
   // -----------------------------------------------------------------------
+  // sd-slice — the part of the SD one task needs, for the executor spawn prompt.
+  // ids = --ids + FR/TC ids named in the task text (title/description/details/
+  // testStrategy, subtasks) + trace fr-task links for the task; each FR then
+  // brings its fr-tc TCs. Output: verbatim rows + a line-numbered outline of the
+  // rest, so the executor reads other sections by range instead of the whole SD.
+  'sd-slice'(args) {
+    const { feature } = resolveActiveFeature(args.feature || args.tag);
+    if (!feature) return err('NO_FEATURE: pass --feature <feature>');
+    const sdPath = args.sd || path.join(STATE_DIR, 'specs', feature, 'SD.md');
+    if (!fs.existsSync(sdPath)) return err(`SD_NOT_FOUND: ${sdPath}`);
+    if (!args.task && !args.ids) return err('USAGE: sd-slice --feature <feature> (--task <id> | --ids FR-001,TC-002) [--sd <path>] [--out <file>]');
+
+    const ids = new Set(sdSlice.idsFromText(args.ids || ''));
+    const via = [];
+    if (args.ids) via.push('--ids');
+    let taskTitle = null;
+    if (args.task) {
+      const tmPath = path.join(process.cwd(), '.taskmaster', 'tasks', 'tasks.json');
+      const tasks = readTmTasks(readJsonSafe(tmPath, null), feature);
+      const [parentId, subId] = String(args.task).split('.');
+      const parent = tasks.find((t) => String(t.id) === parentId);
+      if (!parent) return err(`ERR_TASK_NOT_FOUND: task ${args.task} in tag ${feature}`);
+      const textOf = (t) => [t.title, t.description, t.details, t.testStrategy].filter(Boolean).join('\n');
+      const subs = Array.isArray(parent.subtasks) ? parent.subtasks : [];
+      const picked = subId ? subs.filter((s) => String(s.id) === subId) : subs;
+      if (subId && !picked.length) return err(`ERR_TASK_NOT_FOUND: subtask ${args.task} in tag ${feature}`);
+      taskTitle = (subId ? picked[0].title : parent.title) || null;
+      const fromText = sdSlice.idsFromText([textOf(parent), ...picked.map(textOf)].join('\n'));
+      if (fromText.length) via.push('task text');
+      fromText.forEach((i) => ids.add(i));
+
+      const raw = readTrace(feature);
+      const tr = raw ? hydrateTrace(feature, raw) : null;
+      const links = (tr && tr.links) || [];
+      const linked = links.filter((l) => l.type === 'fr-task' && String(l.to) === parentId).map((l) => String(l.from).toUpperCase());
+      if (linked.length) via.push('trace fr-task');
+      linked.forEach((i) => ids.add(i));
+      const frs = [...ids].filter((i) => i.startsWith('FR-'));
+      const tcs = links.filter((l) => l.type === 'fr-tc' && frs.includes(String(l.from).toUpperCase())).map((l) => String(l.to).toUpperCase());
+      if (tcs.length) via.push('trace fr-tc');
+      tcs.forEach((i) => ids.add(i));
+    }
+
+    const sdText = fs.readFileSync(sdPath, 'utf8');
+    const s = sdSlice.sliceSd(sdText, ids);
+    const rel = path.relative(process.cwd(), sdPath) || sdPath;
+    const outlineMd = s.outline
+      .filter((h) => h.level >= 2) // the H1 title spans the whole file — no information
+      .map((h) => `${'  '.repeat(h.level - 2)}- L${h.from}-${h.to} ${h.title}`)
+      .join('\n');
+    const head = ids.size
+      ? `> SD slice for ${args.task ? `task ${args.task}` : 'ids'}: ${[...ids].join(', ')} — from ${rel} (${s.sdLines} lines). These rows are the binding spec for this task. For any other section (sequence/state diagrams, data model, decisions) read ${rel} by the line range in the outline below — do not read the whole file.`
+      : `> No FR/TC id found for ${args.task ? `task ${args.task}` : 'this request'} (chore task, or the task text names none). Use the outline to read only the sections the task touches in ${rel}.`;
+    const markdown = [head, '', s.markdown, '', `## SD outline (${rel})`, '', outlineMd, ''].join('\n').replace(/\n{3,}/g, '\n\n');
+    if (args.out) { ensureDir(path.dirname(args.out)); fs.writeFileSync(args.out, markdown); }
+
+    const warnings = [];
+    if (s.missing.length) warnings.push(`IDS_NOT_IN_SD: ${s.missing.join(', ')} — named by the task but not found in ${rel}; check the task text or run /sf:change`);
+    return ok({
+      feature,
+      task: args.task || null,
+      title: taskTitle,
+      sd: rel,
+      ids: [...ids],
+      via,
+      expanded: s.ids.filter((i) => !ids.has(i)),
+      errorCodes: s.errorCodes,
+      sdLines: s.sdLines,
+      sliceLines: markdown.split('\n').length,
+      out: args.out || null,
+      warnings,
+      markdown,
+    });
+  },
+
   'wave-plan'(args) {
     const tmPath = path.join(process.cwd(), '.taskmaster', 'tasks', 'tasks.json');
     // Per-feature tag isolation (same as status-report/state-update): read the

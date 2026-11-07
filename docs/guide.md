@@ -157,7 +157,7 @@ Everything policy-shaped lives as data in `.spec-flow/config.json`, seeded by `/
 
 **AI mode for task generation.** Default is `agent-native`: the active Claude Code or Codex session fulfils a generation spec and the engine validates and imports the result. For CI or cron with no host agent, set `taskCore.headlessFallback` to an HTTP endpoint, model and key from the environment. Off by default, and the engine opens no HTTP client unless it is configured. Details in [docs/ai-hybrid-usage.md](ai-hybrid-usage.md).
 
-**Verification gate.** `verify.testCommand`, `coverageThreshold`, `forbiddenPatterns`, `secretScan`, per repo when a feature spans several repositories (`config.repos`).
+**Verification gate.** `verify.testCommand`, `coverageThreshold`, `forbiddenPatterns`, `secretScan`, per repo when a feature spans several repositories (`config.repos`). `verify-code --task` runs only that task's tests: automatically for Gradle, Maven and a plain `go test` command (narrowed to the task's packages), through `verify.taskTestCommand` (a template with `{files}`) for other stacks. An empty `testCommand` makes the gate skip tests on every task; `/sf:doctor` warns `WARN_TESTCOMMAND_EMPTY` and names the command to set.
 
 **Code rules.** Team coding rules are enforced in two layers.
 
@@ -243,6 +243,7 @@ Two CLIs ship in `bin/`. Both are zero-network and print one JSON line per call.
 | | `checkpoint-write` / `checkpoint-clear` | mid-task checkpoint |
 | | `task-baseline --feature [--apply]` | mark tasks done from verification evidence only, dry-run by default |
 | | `wave-plan [--max]` | ready set of pending tasks whose dependencies are done |
+| | `sd-slice --feature (--task <id> \| --ids) [--out]` | the SD rows one task covers (FR, its TCs, the error codes they name) plus a line-numbered outline; `/sf:phase` pastes it into the executor prompt instead of the SD path |
 | Records | `bug-new` / `bug-list` | bug records in `.spec-flow/bugs/` |
 | | `backlog-new --title --priority high\|medium\|low` / `backlog-list [--status] [--epic] [--feature]` / `backlog-set --id [--priority] [--status]` | deferred-work records in `.spec-flow/backlog/`, listed in priority order; priority is required on create; hand-written files without the record marker are still listed (`legacy`, priority `unset`) and never rewritten by a list |
 | | `epic-new --name [--subs]` / `epic-attach --epic --feature` / `epic-list` / `epic-show --epic` | epic workspaces: `.spec-flow/epics/<slug>/` with `EPIC.md` plus `srs/ decisions/ state/ assets/` for cross-phase docs; a feature joins one epic (`specs/<feature>/EPIC` points back); progress is computed from each sub-feature's tasks and ship record; single-file epics still read, never auto-migrated |

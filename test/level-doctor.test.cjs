@@ -95,3 +95,59 @@ test('both invalid at once -> both warnings, independent', () => {
   assert.equal(withCode(checks, 'WARN_ITBUDGET_INVALID').length, 1);
   assert.equal(withCode(checks, 'WARN_CLOSEOUTSUITE_INVALID').length, 1);
 });
+
+// ---------------------------------------------------------------------------
+// WARN_TESTCOMMAND_EMPTY — an empty verify.testCommand turns the verify gate
+// into a silent no-op for a whole phase; doctor names it before the phase runs.
+// ---------------------------------------------------------------------------
+
+/** Doctor in a temp dir prepared by `setup(dir)` before init, config patched after. */
+function doctorIn(setup, patch, initArgs) {
+  const prev = process.cwd();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sf-level-doctor-'));
+  try {
+    process.chdir(dir);
+    if (setup) setup(dir);
+    maintenance['init-project'](initArgs || {});
+    const cfgPath = '.spec-flow/config.json';
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    for (const [k, v] of Object.entries(patch || {})) cfg[k] = Object.assign({}, cfg[k], v);
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+    return maintenance.doctor({}).data.checks;
+  } finally {
+    process.chdir(prev);
+  }
+}
+
+test('doctor: empty testCommand with a detectable build tool → WARN_TESTCOMMAND_EMPTY naming the command to set', () => {
+  const checks = doctorIn((d) => fs.writeFileSync(path.join(d, 'go.mod'), 'module x\n'), { verify: { testCommand: null } });
+  const hits = withCode(checks, 'WARN_TESTCOMMAND_EMPTY');
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].status, 'warn');
+  assert.match(hits[0].detail, /detected go/);
+  assert.match(hits[0].fix, /config\.verify\.testCommand = "go test \.\/\.\.\."/);
+});
+
+test('doctor: unknown stack at init (no build file at root) → WARN_TESTCOMMAND_EMPTY with a placeholder fix', () => {
+  const hits = withCode(doctorIn(null, null, {}), 'WARN_TESTCOMMAND_EMPTY');
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].fix, /<command>/);
+});
+
+test('doctor: testCommand set → no WARN_TESTCOMMAND_EMPTY', () => {
+  assert.equal(withCode(doctorWith({}), 'WARN_TESTCOMMAND_EMPTY').length, 0);
+});
+
+test('doctor: multi-repo — a repo with no effective testCommand is named, a repo with an override is not', () => {
+  const checks = doctorIn((d) => {
+    for (const r of ['svc-a', 'svc-b']) {
+      fs.mkdirSync(path.join(d, r, '.git'), { recursive: true });
+    }
+    fs.writeFileSync(path.join(d, 'svc-a', 'go.mod'), 'module a\n');
+  }, { repos: { 'svc-b': { path: 'svc-b', verify: { testCommand: 'make test' } } } }, { repos: 'svc-a=svc-a,svc-b=svc-b' });
+  // Init found no build file at the hub root → top-level testCommand is null.
+  const hits = withCode(checks, 'WARN_TESTCOMMAND_EMPTY');
+  assert.equal(hits.length, 1, 'only svc-a inherits the empty top-level testCommand');
+  assert.match(hits[0].detail, /config\.repos\["svc-a"\].*detected go/);
+  assert.match(hits[0].fix, /config\.repos\["svc-a"\] = \{ "path": "svc-a", "verify": \{ "testCommand": "go test \.\/\.\.\." \} \}/);
+});
