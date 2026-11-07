@@ -73,7 +73,16 @@ Deterministic per-FR complexity (1–10) — this is the **only** complexity sig
    ```
    Returns `ready` (dependencies all `done`). It does **not** prove file-disjointness — files touched aren't known until a task runs. If `ready` has ≥2 tasks, judge disjointness yourself from each `title`/`details` (`task-get --id <id>`): different component/layer/file, no shared entity → safe to batch. Same file or one extends the other → sequential. **When in doubt, sequential** — a wrong guess means two executors clobber the same file with no worktree isolation. Otherwise: `task-next --tag <feature>`.
 
-2. **Spawn hybrid-executor** — one per task selected in step 1 (multiple Agent calls in ONE message when the batch is file-disjoint). Give it: task details + `CONTEXT.md` + the relevant SD section refs. Before spawning, run `node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs code-rules-list` and paste every returned `## Code Rules` rule (`id` + `text`) **verbatim** into every executor prompt — binding, not "read if present". The list is the project's `## Code Rules` plus its `## Code review checklist` section (older projects keep their real rules there); never pick the bullets out of `project-author.md` by hand — a heading you did not look for turns the whole gate into a silent no-op. Its `warnings` (e.g. `RULES_REVIEWER_OFF`) → tell the user once per run. **Code stays English even when `config.language` ≠ `en`** (that setting is conversation + docs only). **Model:** `config.json → models.hybridExecutor`; non-null → pass as the Agent `model` param, else omit.
+2. **Spawn hybrid-executor** — one per task selected in step 1 (multiple Agent calls in ONE message when the batch is file-disjoint). Give it: task details + `CONTEXT.md` + **the SD slice**, not the SD path:
+   ```
+   node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs sd-slice --feature <feature> --task <id>
+   ```
+   Paste `data.markdown` verbatim into the prompt: this task's FR / TC / error-code rows plus a line-numbered outline the executor uses to open any other section by range. Every executor starts cold, so one reading the whole SD per task was the largest repeated cost of a phase. `warnings` with `IDS_NOT_IN_SD` → the task names an FR/TC the SD does not have: fix the task text, or route through `/sf:change`, before spawning. A chore task gets the outline only, which is expected.
+   **Known analogs:** from the second task on, also pass the `Analogs:` paths earlier executors reported (deduped, at most ~10), so the next one starts from them instead of re-surveying the codebase.
+
+   Before spawning, run `node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs code-rules-list` and paste every returned `## Code Rules` rule (`id` + `text`) **verbatim** into every executor prompt — binding, not "read if present". The list is the project's `## Code Rules` plus its `## Code review checklist` section (older projects keep their real rules there); never pick the bullets out of `project-author.md` by hand — a heading you did not look for turns the whole gate into a silent no-op. Its `warnings` (e.g. `RULES_REVIEWER_OFF`) → tell the user once per run. **Code stays English even when `config.language` ≠ `en`** (that setting is conversation + docs only). **Model:** `config.json → models.hybridExecutor`; non-null → pass as the Agent `model` param, else omit.
+
+   **Parallel batch — shared test resources.** File-disjoint is not enough when the tasks' tests hit the same external resource (one Postgres, broker, or fixed port, typical of DB-backed integration tests): two executors then run tests against it at the same time and get timeouts or each other's rows. Batch such tasks only if at most one of them has tests that need the shared resource; otherwise run them sequentially.
 
    **Parallel batch:** steps 3-6 still run once per task, in any order — safe only because you judged the batch file-disjoint. Do **not** parallelize `trace-build` (it rebuilds the whole file); run it once after every task in the batch has logged its `trace-link`.
 
@@ -103,7 +112,7 @@ Deterministic per-FR complexity (1–10) — this is the **only** complexity sig
    ```
    node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs verify-code --feature <feature> --task <id>
    ```
-   **Always pass `--task <id>`** — it scopes `tests` to this task's own test file(s) (via step 3's `trace-link`) instead of the full suite; that is the main lever for phase speed on a multi-task SD (the full suite runs once, at close-out 1a). Static checks scan the whole scoped root regardless, including `code-rules` (from `config.verify.rules`) — a `code-rules` failure halts like any other static check. **Multi-repo: always also pass `--feature`.**
+   **Always pass `--task <id>`** — it scopes `tests` to this task's own test file(s) (via step 3's `trace-link`) instead of the full suite; that is the main lever for phase speed on a multi-task SD (the full suite runs once, at close-out 1a). Scoping is automatic for Gradle, Maven and a plain `go test` command (narrowed to the task's packages); other stacks need `config.verify.taskTestCommand`. **This is the per-task test run: do not also run the test command by hand**, before or after it — that doubles the cost and, during a parallel batch, collides on a shared test database. Static checks scan the whole scoped root regardless, including `code-rules` (from `config.verify.rules`) — a `code-rules` failure halts like any other static check. **Multi-repo: always also pass `--feature`.**
    - `gate: "fail"` → `task-set-status` → `review`; surface `detail` + `fix`; **halt**.
    - `gate: "pass"` → proceed. Confirms THIS task's tests + static checks, not the whole codebase.
    - `gate: "skipped"` → **nothing was verified** (no `verify` block). Do NOT report the code as verified. Say so **once per phase, on the first task only**, then stay silent on it.
@@ -234,7 +243,7 @@ Deterministic per-FR complexity (1–10) — this is the **only** complexity sig
 ## Pipeline recap
 ```
 parse-prd (3-phase) → route --sd → wave-plan → [task-next | parallel batch]
-  → hybrid-executor (TDD RED) → task-set-status(review) + trace-link + trace-build
+  → sd-slice --task <id> → hybrid-executor (TDD RED) → task-set-status(review) + trace-link + trace-build
   → verify-code --task <id> → run-checklist smoke (deferrable) → task-set-status(done) → state-update
   → verify-code (full suite, once) → run-checklist regression → verify-collect → VERIFICATION.md
   → [optional gate] review-scope → code-review sub-agent → review-collect → CODE-REVIEW.md → ship
