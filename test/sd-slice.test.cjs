@@ -181,6 +181,17 @@ test('sd-slice --task: ids from the task text, TCs from the trace, slice + outli
   assert.deepEqual(r.data.warnings, []);
 });
 
+test('sd-slice: a trace-link stored with a comma list in --fr is split, not reported as one unknown id', () => {
+  const dir = seed();
+  // Field case: `trace-link --fr "FR-001,FR-002"` stores ONE link whose from is the whole list.
+  run(['trace-link', '--task', '3', '--feature', 'demo', '--fr', 'FR-001,FR-002', '--files', 'go.mod'], dir);
+  const r = run(['sd-slice', '--feature', 'demo', '--task', '3'], dir);
+  assert.equal(r.ok, true);
+  assert.ok(r.data.ids.includes('FR-001') && r.data.ids.includes('FR-002'));
+  assert.ok(!r.data.ids.some((i) => i.includes(',')), 'no glued id survives');
+  assert.deepEqual(r.data.warnings, []);
+});
+
 test('sd-slice --task <parent>.<sub>: reads the subtask text', () => {
   const dir = seed();
   const r = run(['sd-slice', '--feature', 'demo', '--task', '2.1'], dir);
@@ -238,4 +249,49 @@ test('agents/hybrid-executor.md reads the slice and opens other SD sections by l
 
 test('commands/bug.md STEP 4a pastes an sd-slice for the impacted ids', () => {
   assert.match(read('commands/bug.md'), /sd-slice --feature <feature> --ids/);
+});
+
+// ---- large outputs survive a pipe -----------------------------------------
+// Both entrypoints used to process.exit() right after an async write to a pipe,
+// so anything above 64 KB reached the caller (an agent's Bash tool) cut mid-JSON.
+
+const { spawn } = require('node:child_process');
+
+/** Run a bin through a real pipe; resolve with stdout bytes. */
+function pipeRun(bin, args, cwd, env) {
+  return new Promise((resolve, reject) => {
+    const p = spawn('node', [bin, ...args], { cwd, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'ignore'] });
+    const chunks = [];
+    p.stdout.on('data', (c) => chunks.push(c));
+    p.on('error', reject);
+    p.on('close', () => resolve(Buffer.concat(chunks).toString('utf8')));
+  });
+}
+
+function bigSd(rows) {
+  const filler = 'x'.repeat(200);
+  const fr = Array.from({ length: rows }, (_, i) => `| FR-${String(i + 1).padStart(3, '0')} | Requirement ${filler} | Must Have |`);
+  return ['# SD: big', '', '## 5.1 Functional Requirements', '', '| ID | Requirement | Priority |', '| --- | --- | --- |', ...fr, ''].join('\n');
+}
+
+test('flow-tools: a result above 64 KB arrives whole through a pipe', async () => {
+  const dir = seed();
+  fs.writeFileSync(path.join(dir, '.spec-flow', 'specs', 'demo', 'SD.md'), bigSd(600));
+  const ids = Array.from({ length: 600 }, (_, i) => `FR-${String(i + 1).padStart(3, '0')}`).join(',');
+  const out = await pipeRun(ENGINE, ['sd-slice', '--feature', 'demo', '--ids', ids], dir);
+  assert.ok(Buffer.byteLength(out) > 65536 * 2, `output is large enough to have been cut (${Buffer.byteLength(out)} bytes)`);
+  const r = JSON.parse(out);
+  assert.equal(r.ok, true);
+  assert.match(r.data.markdown, /FR-600/);
+});
+
+test('task-master: a parse-prd GenerationSpec above 64 KB arrives whole through a pipe', async () => {
+  const dir = seed();
+  const sd = path.join(dir, 'big-sd.md');
+  fs.writeFileSync(sd, bigSd(600));
+  const bin = path.join(__dirname, '..', 'bin', 'task-master');
+  const out = await pipeRun(bin, ['parse-prd', '--input', sd, '--tag', 'probe'], dir, { SPEC_FLOW_HOST_AGENT: '1' });
+  assert.ok(Buffer.byteLength(out) > 65536 * 2);
+  const spec = JSON.parse(out);
+  assert.match(spec.inputContent, /FR-600/);
 });
