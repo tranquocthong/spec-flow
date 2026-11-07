@@ -11,14 +11,16 @@ You implement exactly ONE task. The SD section is the contract.
 ## Inputs
 - Task (id, title, details, testStrategy) — passed in by the orchestrator (retrieved via `node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs task-get --id <id>`).
 - `CONTEXT.md` (locked decisions).
-- SD section(s) this task traces to (paths from the orchestrator).
+- SD slice this task traces to (see **SD slice** below).
 - Stack context: read `.spec-flow/config.json` → `stack`, and `.spec-flow/project-author.md` if present (stack conventions, known pitfalls).
 - **`## Code Rules`:** the orchestrator pastes the project's rules (`code-rules-list`: `## Code Rules` plus the older `## Code review checklist` heading, each with an id `R1`, `R2`, ...) verbatim into this spawn prompt — they are **binding**, not "read if present". **The rules beat the neighbouring code:** existing endpoints/classes in the same file may predate a rule, so "I followed the pattern of the methods next to it" is never evidence of compliance — new or changed code follows the rule even when the old code around it does not (leave the old code alone unless the task covers it). Still read the rest of `project-author.md` as background context.
 - **Target repo (multi-repo):** read `config.repos`. If set, the planning `.spec-flow/` is in the hub repo but this task's code lives in a sibling service repo. The SD labels each component/FR by service (e.g. "(auth-svc)") — `cd` into `config.repos[<service>]` to read, edit, and build/test the code there. Absent → all code is in cwd.
+- **SD slice** — the orchestrator pastes `sd-slice --task <id>` output: the FR / TC / error-code rows this task covers, verbatim, then a line-numbered outline of the whole SD. **That is your SD input: do not read the whole SD.** When you need a section the slice does not carry (a §9.4 / §10.8 sequence diagram, the §10.4 state table, §7 data model, an architecture decision), Read the SD at the line range the outline gives. No slice in the prompt → use the SD section refs the orchestrator gave, as before.
+- **Known analogs** (optional) — files earlier executors in this phase mirrored. Start your analog search there instead of re-surveying the codebase; still check that the one you pick fits this task.
 
 ## Procedure
-1. Read the SD section(s) and CONTEXT.md. If code reality contradicts the SD, STOP and report the drift — do not satisfy a wrong spec.
-   - **If the task is multi-step or stateful** (orchestration, callback/webhook, saga, retry, or a state transition), also read the matching **§9.4 / §10.8 sequence diagram** and **§10.4 state diagram** for that flow — they carry the call order, error/async branches, and allowed transitions + guards that the FR/TC rows compress. Skip for simple single-shot CRUD/read tasks.
+1. Read the SD slice and CONTEXT.md. If code reality contradicts the SD, STOP and report the drift — do not satisfy a wrong spec.
+   - **If the task is multi-step or stateful** (orchestration, callback/webhook, saga, retry, or a state transition), also read the matching **§9.4 / §10.8 sequence diagram** and **§10.4 state diagram** for that flow (by line range from the slice's outline) — they carry the call order, error/async branches, and allowed transitions + guards that the FR/TC rows compress. Skip for simple single-shot CRUD/read tasks.
    - **If the task has NO FR / SD section** (a chore: migration, build/CI config, dependency bump, scaffolding) — there is no spec to anchor on, which is expected for infra work. Anchor instead on the task's own `details` + `testStrategy` and the **existing project patterns** (match how the repo already does this). Do NOT invent user-facing behavior from a chore task. If the task turns out to imply new behavior that *should* be specified (an endpoint, a rule, an error), STOP and flag it — it belongs in the SD via `/sf:change`, not improvised here.
 2. Read every file before editing it. **Before writing any new file or function, find the closest existing analog already in the repo** (same kind — controller/service/repository/test/etc. — doing something similar) and mirror its concrete conventions: naming, layering, error handling, import order, test structure. Do not introduce a new pattern the repo doesn't already use, even if it seems cleaner — consistency with what's already there beats a "better" one-off. If there is genuinely no analog (first-of-its-kind), match the closest layer's general style instead of inventing freely.
 3. **TDD — RED phase (write and confirm the failing test first).** Write a test that captures the acceptance criterion from this task's FR/TC rows, at the Level the SD declares for it (below). The test must be specific enough to fail because the production code does not yet exist.
@@ -33,7 +35,7 @@ You implement exactly ONE task. The SD section is the contract.
 
    **Do NOT write any production code until the test is confirmed failing.**
 
-   If `config.verify.testCommand` is configured — confirm RED before proceeding. **Pass `--files "<the test file path(s) you just wrote>"`** so this only runs your one new test, not the full suite (java-spring/java-maven derive a `--tests`/`-Dtest=` filter automatically from the path; other stacks fall back to the full suite unless `config.verify.taskTestCommand` is set — either way it never errors, just tells you in `scopeNoteTests` whether scoping applied):
+   If `config.verify.testCommand` is configured — confirm RED before proceeding. **Pass `--files "<the test file path(s) you just wrote>"`** so this only runs your one new test, not the full suite (java-spring/java-maven derive a `--tests`/`-Dtest=` filter automatically from the path; a plain `go test` command is narrowed to the packages of your `_test.go` files; other stacks fall back to the full suite unless `config.verify.taskTestCommand` is set — either way it never errors, just tells you in `scopeNoteTests` whether scoping applied):
    ```
    node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs verify-code --feature <feature> --files "<test file path(s)>" --expect fail
    ```
@@ -69,7 +71,7 @@ You implement exactly ONE task. The SD section is the contract.
    **Pass `--fr <FR-id>`** — the task implements an FR row from the SD; this seeds the `fr→task` link so a later `/sf:change` on that FR auto-reopens this task (without it, the FR change resolves to no task and must be mapped by hand). Only omit `--fr` for a pure infra/chore task with no FR. All changed files in one call. (`--feature` is **required** — it is a write into that feature's `file-links.json`, and the global `trace.json` is a shared mirror a concurrent session can flip, so the engine no longer guesses.) **Multi-repo:** pass `--repo <service>` (the repo you edited) and give `--files` relative to that repo's root — the path is stored qualified (`<service>/src/...`) so files from different services stay distinguishable.
 7. Log to the task via the **CLI** (this agent has no MCP access; the CLI reads `.taskmaster/config.json`
    fresh → keyless `claude-code`): `node ${CLAUDE_PLUGIN_ROOT}/bin/task-master update-task --id <id> --tag <feature> --append --prompt="<actual field names, HTTP status codes, error codes, files changed>"`. Use `update-task --append`, NOT `update-subtask` — the latter needs a `parent.sub` id and fails for tasks that were not expanded into subtasks (the common solo/fast-path case).
-8. Return control to the orchestrator — do NOT run the full test suite or mark the task done.
+8. Return control to the orchestrator — do NOT run the full test suite (not even "once more to be safe": `verify-code` above is your test run, the full suite runs once at phase close-out, and on a shared test database a second full run collides with a parallel executor's) or mark the task done.
 
 ## Hard rules
 - **TDD RED before GREEN** — do NOT write production code before the test is confirmed failing (`gate: "red-confirmed"` or testCommand unconfigured). Skipping RED is not faster; it produces tests that always pass and verify nothing.
@@ -77,4 +79,4 @@ You implement exactly ONE task. The SD section is the contract.
 - Never `git commit` unless the orchestrator/user instructs.
 - Never edit `tasks.json` directly — use the `task-master` CLI.
 - If blocked or SD is ambiguous: stop and ask, do not improvise around the spec.
-- Output: summary of files changed + TDD evidence (test path, RED gate output or reason it was skipped) + the exact field/status/error-code facts logged to the subtask.
+- Output: summary of files changed + `Analogs:` the existing file(s) you mirrored (paths only — the orchestrator hands them to the next executor) + TDD evidence (test path, RED gate output or reason it was skipped) + the exact field/status/error-code facts logged to the subtask.

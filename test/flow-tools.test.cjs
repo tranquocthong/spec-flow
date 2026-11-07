@@ -1067,6 +1067,49 @@ test('verify-code: --task honors an explicit verify.taskTestCommand template for
   assert.deepEqual(readCmdline(dir), ['--', 'test/foo.test.js']);
 });
 
+/** A fake `go` binary at <dir>/bin/go that records its argv into CMDLINE.txt. */
+function goProject(testCommand) {
+  const dir = tmpProject();
+  assert.equal(run(['init-project', '--stack', 'go'], dir).ok, true);
+  fs.mkdirSync(path.join(dir, 'bin'), { recursive: true });
+  const fake = path.join(dir, 'bin', 'go');
+  fs.writeFileSync(fake, '#!/bin/sh\nprintf "%s\\n" "$@" > CMDLINE.txt\n');
+  fs.chmodSync(fake, 0o755);
+  const cfgPath = path.join(dir, '.spec-flow', 'config.json');
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  cfg.verify.testCommand = testCommand;
+  cfg.verify.coverageThreshold = null; cfg.verify.forbiddenPatterns = []; cfg.verify.secretScan = false;
+  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+  return dir;
+}
+
+test('verify-code: --task scopes go tests to the packages of the task\'s *_test.go files, keeping flags', () => {
+  const dir = goProject('./bin/go test -count=1 ./...');
+  run(['trace-link', '--task', '5', '--feature', 'demo', '--fr', 'FR-001',
+    '--files', 'internal/places/repo.go,internal/places/repo_test.go,internal/places/svc_test.go,api/handler_test.go'], dir);
+  const r = run(['verify-code', '--feature', 'demo', '--task', '5'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.testsScoped, true);
+  assert.deepEqual(readCmdline(dir), ['test', '-count=1', './internal/places', './api'],
+    'base package pattern ./... replaced by the task packages; -count=1 kept; non-test .go file adds nothing');
+});
+
+test('verify-code: --files on a root-level go test file scopes to "."', () => {
+  const dir = goProject('./bin/go test ./...');
+  const r = run(['verify-code', '--files', 'main_test.go', '--expect', 'fail'], dir);
+  assert.equal(r.ok, true);
+  assert.deepEqual(readCmdline(dir), ['test', '.']);
+});
+
+test('verify-code: go scoping refuses a wrapped testCommand (make/script) → full suite with the fallback note', () => {
+  const dir = goProject(CAPTURE_ARGS_CMD);
+  run(['trace-link', '--task', '1', '--feature', 'demo', '--fr', 'FR-001', '--files', 'pkg/a/a_test.go'], dir);
+  const r = run(['verify-code', '--feature', 'demo', '--task', '1'], dir);
+  assert.equal(r.data.testsScoped, false);
+  assert.match(r.data.scopeNoteTests, /could not derive a filter/);
+  assert.deepEqual(readCmdline(dir), [], 'not a plain `go test` → never rewritten');
+});
+
 test('verify-code: no --task/--files → unscoped, identical to pre-existing behavior', () => {
   const dir = tmpProject();
   assert.equal(run(['init-project', '--stack', 'java-spring'], dir).ok, true);

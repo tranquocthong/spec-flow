@@ -96,7 +96,8 @@ Update "## Linked (FR/TC/file):" with trace-impact output.
 
 ## STEP 4a — CODE-FIX PATH (code-bug only — do NOT edit the SD)
 
-Spawn **hybrid-executor** with:
+Spawn **hybrid-executor** with the SD slice for the impacted ids pasted in (not the SD path):
+`node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs sd-slice --feature <feature> --ids "<impacted FR/TC ids>"` → paste `data.markdown`.
 
 > "Fix the code to MATCH SD section `<ref>`. Do NOT change the SD.
 >  Bug: `<id>` — `<description>`.
