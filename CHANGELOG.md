@@ -2,7 +2,7 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
-## [Unreleased]
+## [0.18.0] — 2026-11-07
 
 Cuts the repeated cost a field report measured on a 10-task Go phase (each executor re-reading a 1,200-1,700-line SD, the test suite running twice per task, a verify gate that never ran).
 
