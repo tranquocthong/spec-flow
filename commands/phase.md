@@ -94,11 +94,11 @@ Deterministic per-FR complexity (1–10) — this is the **only** complexity sig
    ```
    node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs task-set-status --tag <feature> --id <id> --status review
    node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs trace-link \
-     --task <id> --feature <feature> --fr <FR-id> [--repo <service>] \
+     --task <id> --feature <feature> --fr "<FR-a,FR-b>" [--repo <service>] \
      --files "<comma-separated relative paths changed>"
    node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs trace-build --sd .spec-flow/specs/<feature>/SD.md
    ```
-   **Always pass `--fr <FR-id>`** — it seeds the `fr→task` link that lets a later `/sf:change` on that FR auto-reopen this exact task via `trace-impact`. Omit it and the FR change resolves to `tasks=[]`. Only drop it for a pure infra/chore task with no FR (say so when you do).
+   **Always pass `--fr` with every FR the task implements** (comma list) — it seeds one `fr→task` link per FR, which lets a later `/sf:change` on any of them auto-reopen this exact task via `trace-impact`. Omit it and the FR change resolves to `tasks=[]`. A re-link adds FRs, it never drops ones recorded earlier. Only drop it for a pure infra/chore task with no FR (say so when you do).
 
    **Optional narrative log — `config.phase.taskNotes` (default `false`).** Absent or `false` → **skip entirely**. `update-task --append` is one AI subprocess per task (measured 13.2 tasks/feature) producing only human-readable history — it is not the source of truth. Only when `true`:
    ```bash
