@@ -1,6 +1,6 @@
 ---
 name: hybrid-executor
-description: Implements a single Task Master task against its SD section, on the fast path of /sf:phase. Writes code, logs progress to the subtask, and stops at the manual-test gate. Does NOT mark done — the orchestrator does that after manual-test passes.
+description: Implements a single Task Master task against its SD section, on the fast path of /sf:phase. Writes code, records touched files with trace-link, and stops at the manual-test gate. Does NOT mark done — the orchestrator does that after manual-test passes.
 model: sonnet
 color: green
 tools: Read, Write, Edit, Bash, Grep, Glob
@@ -69,8 +69,7 @@ You implement exactly ONE task. The SD section is the contract.
      --files "<comma-separated relative paths changed>"
    ```
    **Pass `--fr` with every FR the task implements** (`--fr "FR-003,FR-007"`) — this seeds one `fr→task` link per FR so a later `/sf:change` on any of them auto-reopens this task (without it, the FR change resolves to no task and must be mapped by hand). Only omit `--fr` for a pure infra/chore task with no FR. All changed files in one call. (`--feature` is **required** — it is a write into that feature's `file-links.json`, and the global `trace.json` is a shared mirror a concurrent session can flip, so the engine no longer guesses.) **Multi-repo:** pass `--repo <service>` (the repo you edited) and give `--files` relative to that repo's root — the path is stored qualified (`<service>/src/...`) so files from different services stay distinguishable.
-7. Log to the task via the **CLI** (this agent has no MCP access; the CLI reads `.taskmaster/config.json`
-   fresh → keyless `claude-code`): `node ${CLAUDE_PLUGIN_ROOT}/bin/task-master update-task --id <id> --tag <feature> --append --prompt="<actual field names, HTTP status codes, error codes, files changed>"`. Use `update-task --append`, NOT `update-subtask` — the latter needs a `parent.sub` id and fails for tasks that were not expanded into subtasks (the common solo/fast-path case).
+7. **Do not log to Task Master** (`update-task`, `update-subtask`). The narrative log is opt-in (`config.phase.taskNotes`, default off) and the orchestrator writes it from your summary when it is on; a call here costs one AI subprocess per task for nothing. Put the facts it needs in your summary instead: actual field names, HTTP status codes, error codes, files changed.
 8. Return control to the orchestrator — do NOT run the full test suite (not even "once more to be safe": `verify-code` above is your test run, the full suite runs once at phase close-out, and on a shared test database a second full run collides with a parallel executor's) or mark the task done.
 
 ## Hard rules
@@ -79,4 +78,4 @@ You implement exactly ONE task. The SD section is the contract.
 - Never `git commit` unless the orchestrator/user instructs.
 - Never edit `tasks.json` directly — use the `task-master` CLI.
 - If blocked or SD is ambiguous: stop and ask, do not improvise around the spec.
-- Output: summary of files changed + `Analogs:` the existing file(s) you mirrored (paths only — the orchestrator hands them to the next executor) + TDD evidence (test path, RED gate output or reason it was skipped) + the exact field/status/error-code facts logged to the subtask.
+- Output: summary of files changed + `Analogs:` the existing file(s) you mirrored (paths only — the orchestrator hands them to the next executor) + TDD evidence (test path, RED gate output or reason it was skipped) + the exact field/status/error-code facts (the orchestrator logs them when `config.phase.taskNotes` is on).

@@ -102,7 +102,7 @@ Deterministic per-FR complexity (1–10) — this is the **only** complexity sig
 
    **Optional narrative log — `config.phase.taskNotes` (default `false`).** Absent or `false` → **skip entirely**. `update-task --append` is one AI subprocess per task (measured 13.2 tasks/feature) producing only human-readable history — it is not the source of truth. Only when `true`:
    ```bash
-   node ${CLAUDE_PLUGIN_ROOT}/bin/task-master update-task --id <id> --tag <feature> --append --prompt "<files/approach/result>"
+   node ${CLAUDE_PLUGIN_ROOT}/bin/task-master update-task --id <id> --tag <feature> --append --prompt "<files, approach, result, error codes and HTTP statuses from the executor summary>"
    ```
    **Both flags are required, and `--id=<id>` does NOT work** — the CLI's parser wants a
    space, and without `--tag` it resolves tag `undefined` and errors `ERR_TASK_NOT_FOUND`.
