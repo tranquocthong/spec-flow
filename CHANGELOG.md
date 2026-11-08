@@ -2,6 +2,20 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [0.19.0] — 2026-11-08
+
+Measured on a 20-feature Go + Next.js epic (207 executors, about 36 hours wall clock): `go test` was 57% of executor tool time, about 11 runs per task, because `verify-code` scoped runs did not work there and executors ran the suite by hand. A fresh executor per task also spent about a quarter of each task re-learning the codebase; for tasks that build on each other that is avoidable, so reusing the executor is now an option.
+
+### Added
+
+- **New option `phase.executorReuse` (default `false`): keep the executor across related tasks.** When on, `/sf:phase` hands a task that depends on the one just finished, or works in the same component, to the same executor with `SendMessage` (task details + that task's `sd-slice`) instead of spawning a new agent, so it skips re-learning the codebase. Unrelated tasks, hosts without `SendMessage` (Codex) and the extra lanes of a parallel batch still get a fresh executor. One task per message, so every per-task gate still runs. The `phase` options are now documented together in docs/guide.md.
+
+### Fixed
+
+- **Go test scoping refused an env-prefixed `testCommand`.** `APP_TEST_DB=1 go test ./...`, the usual way a DB-backed suite is switched on, did not count as a plain `go test`, so every task ran the whole module. Leading `NAME=value` assignments are now kept and the packages scoped as usual.
+- **Go `--files` with source files only ran the whole module.** The executor's GREEN step passes the source files it changed; with no `_test.go` among them no package was derived. Their packages now stand in when no test file is given. A call that names test files is scoped exactly as before.
+- **A `scanPath` that does not exist reported a clean scan of nothing.** forbidden-patterns, code-rules and secret-scan said `ok` after reading zero files. They now `warn` "nothing was scanned" (a warning never fails the gate). `/sf:init` seeds `scanPath: "src"` only when `src/` exists, `.` otherwise; the presets wrote `src` for node, python, java, dotnet and unknown stacks regardless.
+
 ## [0.18.3] — 2026-11-08
 
 ### Fixed

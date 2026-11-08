@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Marketplace for spec-flow: spec-driven development for Claude Code and Codex where done means a real test ran.",
-    "version": "0.18.3"
+    "version": "0.19.0"
   },
   "plugins": [
     {
