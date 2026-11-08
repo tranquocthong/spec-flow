@@ -15,8 +15,7 @@ change or a bug touches only what it should, months later, in a fresh session.
 ![The API answers 202, but the CHECKLIST checks the database and fails: no delivery log was written. After the fix, the same command passes.](docs/assets/demo.gif)
 
 *The API said 202 and the feature looked done. The CHECKLIST also checked the database, found
-no delivery log, and failed it. Same command after the fix: green. This is a real bug class
-from a real project, reduced to a small demo service.*
+no delivery log, and failed it. Same command after the fix: green.*
 
 ```
 /plugin marketplace add tranquocthong/spec-flow
@@ -35,51 +34,6 @@ built around each of them.
 | Requirements change, and the agent either rewrites too much or quietly misses the part that mattered. | Requirements are diffed against a frozen copy. Only the tasks linked to a changed requirement reopen. |
 | A bug gets "fixed" and comes back two weeks later. | `/sf:bug` writes a failing reproduction test first, fixes, and keeps the test in the regression suite. |
 | After 30 features nobody can say whether requirement FR-014 was built, or how anyone knows. | Every requirement links to its test cases, its tasks and the files that implemented it. |
-
-## Built with spec-flow
-
-spec-flow is not a weekend experiment. Its author has used it every day since June 2026 to
-build and run real products, mostly solo. Counted from the `.spec-flow/` folders in those repos
-on 2026-11-08:
-
-| | |
-| --- | --- |
-| Repositories | 21 |
-| Approved designs (one per feature) | 286 |
-| Requirements traced to code | about 6,200 |
-| Executable test cases in CHECKLISTs | about 9,400 |
-| Tasks built and closed | more than 3,200 |
-| Bugs fixed, each behind a reproduction test | 343 |
-| Changes to already-shipped features | 278 |
-
-The stacks: Go microservices with ConnectRPC, Node.js, Python, Java/Spring, Next.js, Flutter and
-React Native, in single repos, Nx monorepos and multi-repo platforms. Some of what that looked
-like:
-
-**A self-hosted AI API gateway (Node.js), in production for months.** 38 features and 515 tasks,
-built and then kept alive: 122 bugs each fixed behind a repro test, 65 changes to shipped
-features, all through the same design documents.
-
-**A dating app: Go microservices, Next.js web, Flutter mobile.** A systems audit was filed as 122
-bug records, 33 of them critical, and worked off one by one. One example: NATS JetStream streams
-were never created, so 7 services started, logged a warning and then received no events at all.
-The fix was verified against a live NATS server (0 streams before, 11 after), not against mocks.
-
-**An online exam platform (Go + Next.js monorepo).** 43 features, every one of them with a
-recorded verification run, about 1,800 test cases. 19 of its 24 bugs were in older code that
-never had a design, which `/sf:bug` handles without one. One example: the notification service
-never saved a single delivery log, because every insert was rejected and the error surfaced as
-`DATABASE_CONNECTION_ERROR`. The HTTP calls looked fine. A check on the database caught it.
-
-**A city places app, built as an epic.** One requirements document was split into 22
-sub-feature designs (about 1,000 requirements). The sub-features were built in parallel in 11
-git worktrees, one agent session each, coordinated through the files on disk: about 200 commits
-in five days.
-
-**A payments platform (Java/Spring, more than 15 service repos).** One hub repo holds the
-designs, and each design drives code in the service repos it touches, one PR per repo. 26
-designs, 645 tasks, and 126 changes as product kept moving the requirements after the code
-shipped.
 
 ## How it works
 
