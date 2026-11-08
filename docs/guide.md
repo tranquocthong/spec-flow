@@ -157,7 +157,7 @@ Everything policy-shaped lives as data in `.spec-flow/config.json`, seeded by `/
 
 **AI mode for task generation.** Default is `agent-native`: the active Claude Code or Codex session fulfils a generation spec and the engine validates and imports the result. For CI or cron with no host agent, set `taskCore.headlessFallback` to an HTTP endpoint, model and key from the environment. Off by default, and the engine opens no HTTP client unless it is configured. Details in [docs/ai-hybrid-usage.md](ai-hybrid-usage.md).
 
-**Verification gate.** `verify.testCommand`, `coverageThreshold`, `forbiddenPatterns`, `secretScan`, per repo when a feature spans several repositories (`config.repos`). `verify-code --task` runs only that task's tests: automatically for Gradle, Maven and a plain `go test` command (narrowed to the task's packages), through `verify.taskTestCommand` (a template with `{files}`) for other stacks. An empty `testCommand` makes the gate skip tests on every task; `/sf:doctor` warns `WARN_TESTCOMMAND_EMPTY` and names the command to set.
+**Verification gate.** `verify.testCommand`, `coverageThreshold`, `forbiddenPatterns`, `secretScan`, per repo when a feature spans several repositories (`config.repos`). `verify-code --task` runs only that task's tests: automatically for Gradle, Maven and a plain `go test` command (narrowed to the task's packages; leading env assignments such as `APP_TEST_DB=1 go test ./...` are kept, so put the env a DB-backed suite needs right in `testCommand`), through `verify.taskTestCommand` (a template with `{files}`) for other stacks. An empty `testCommand` makes the gate skip tests on every task; `/sf:doctor` warns `WARN_TESTCOMMAND_EMPTY` and names the command to set. `verify.scanPath` is the directory forbidden-patterns, code rules and secret-scan read; `/sf:init` sets `src` only when it exists, and a path that does not exist makes those checks warn "nothing was scanned".
 
 **Code rules.** Team coding rules are enforced in two layers.
 
@@ -182,7 +182,20 @@ Everything policy-shaped lives as data in `.spec-flow/config.json`, seeded by `/
 
 **SD detail.** `sd.detail` is `"lean"` (the default) or `"full"`. A lean SD keeps what the engine, the executor and the reviewer read and leaves out the sections written only for a human reader: §2 Background, §3.1 Goals, the §6.1 diagram, revision history, the glossary, and long decision records (about 20% of an SD, measured on 292 shipped ones). Use `"full"`, or `/sf:ingest --full` for one feature, when the SD is also a document a leader or another team reads. `/sf:resync` and `/sf:change` keep the level an SD was written at; an SD written before this setting existed counts as full.
 
-**Phase.** `phase.confirmTasks` asks before seeding tasks. `phase.taskNotes` turns on per-task AI progress notes (off by default, they cost one AI call per task).
+**Phase.** Options for `/sf:phase`, all under `phase`:
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `confirmTasks` | `true` | Pause after seeding to show the task list before building. |
+| `taskNotes` | `false` | Append an AI-written progress note to each task. Costs one AI call per task; only for a human-readable history. |
+| `codeReview` | `"off"` | Independent review of the finished diff before ship: `"off"`, `"ask"` (asks you each time) or `"always"`. |
+| `executorReuse` | `false` | Keep the executor running across **related** tasks of a feature. A task is related when it depends on the one the executor just finished or works in the same component, package or files; it is handed over with `SendMessage` and skips re-learning the codebase (about a quarter of a task's time on a measured epic). An unrelated task still gets a fresh executor that loads its own context. Hosts without `SendMessage` (Codex) always spawn fresh. Long runs can fill the executor's context; the host compacts it, and the task and its slice stay on disk to re-read. |
+
+```json
+"phase": { "confirmTasks": true, "taskNotes": false, "codeReview": "off", "executorReuse": false }
+```
+
+Related options elsewhere: `models.hybridExecutor` picks the executor's model; `verify.testCommand` and `verify.taskTestCommand` decide how much test each task runs (below).
 
 **Evolving the authoring rules.** When `sd-author` learns a reusable team convention, it is appended to `project-author.md` with a timestamp:
 

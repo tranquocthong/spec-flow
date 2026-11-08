@@ -1101,6 +1101,42 @@ test('verify-code: --files on a root-level go test file scopes to "."', () => {
   assert.deepEqual(readCmdline(dir), ['test', '.']);
 });
 
+test('verify-code: go scoping keeps leading NAME=value env assignments of the testCommand', () => {
+  const dir = goProject('APP_TEST_DB=1 GOFLAGS=-mod=mod ./bin/go test -count=1 ./...');
+  run(['trace-link', '--task', '2', '--feature', 'demo', '--fr', 'FR-001', '--files', 'internal/places/repo_test.go'], dir);
+  const r = run(['verify-code', '--feature', 'demo', '--task', '2'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.testsScoped, true, 'an env-prefixed go test is still a plain go test');
+  assert.deepEqual(readCmdline(dir), ['test', '-count=1', './internal/places']);
+});
+
+test('verify-code: go --files with source files only scopes to their packages instead of the whole module', () => {
+  const dir = goProject('./bin/go test ./...');
+  const r = run(['verify-code', '--files', 'internal/places/repo.go,internal/places/svc.go,cmd/api/wire.go,db/migrations/001.sql'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.testsScoped, true);
+  assert.deepEqual(readCmdline(dir), ['test', './internal/places', './cmd/api'],
+    'no *_test.go given → the changed source packages stand in; non-Go files add nothing');
+});
+
+test('verify-code: an explicit scanPath that does not exist warns "nothing was scanned" instead of a clean ok', () => {
+  const dir = goProject('./bin/go test ./...');
+  const cfgPath = path.join(dir, '.spec-flow', 'config.json');
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  cfg.verify.scanPath = 'src';
+  cfg.verify.forbiddenPatterns = ['fmt\\.Println\\('];
+  cfg.verify.secretScan = true;
+  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+  const r = run(['verify-code'], dir);
+  assert.equal(r.ok, true);
+  for (const name of ['forbidden-patterns', 'secret-scan']) {
+    const c = r.data.checks.find((x) => x.name === name);
+    assert.equal(c.status, 'warn', `${name} must not report ok over zero files`);
+    assert.match(c.detail, /scanPath "src" does not exist .* nothing was scanned/);
+  }
+  assert.equal(r.data.gate, 'pass', 'a warning never fails the gate');
+});
+
 test('verify-code: go scoping refuses a wrapped testCommand (make/script) → full suite with the fallback note', () => {
   const dir = goProject(CAPTURE_ARGS_CMD);
   run(['trace-link', '--task', '1', '--feature', 'demo', '--fr', 'FR-001', '--files', 'pkg/a/a_test.go'], dir);

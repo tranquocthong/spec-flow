@@ -73,12 +73,16 @@ Deterministic per-FR complexity (1–10) — this is the **only** complexity sig
    ```
    Returns `ready` (dependencies all `done`). It does **not** prove file-disjointness — files touched aren't known until a task runs. If `ready` has ≥2 tasks, judge disjointness yourself from each `title`/`details` (`task-get --id <id>`): different component/layer/file, no shared entity → safe to batch. Same file or one extends the other → sequential. **When in doubt, sequential** — a wrong guess means two executors clobber the same file with no worktree isolation. Otherwise: `task-next --tag <feature>`.
 
-2. **Spawn hybrid-executor** — one per task selected in step 1 (multiple Agent calls in ONE message when the batch is file-disjoint). Give it: task details + `CONTEXT.md` + **the SD slice**, not the SD path:
+2. **Spawn hybrid-executor** — one per task selected in step 1 (or, with `phase.executorReuse` on, hand a related task to the running one, see *Executor reuse* below) (multiple Agent calls in ONE message when the batch is file-disjoint). Give it: task details + `CONTEXT.md` + **the SD slice**, not the SD path:
    ```
    node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs sd-slice --feature <feature> --task <id>
    ```
    Paste `data.markdown` verbatim into the prompt: this task's FR / TC / error-code rows plus a line-numbered outline the executor uses to open any other section by range. Every executor starts cold, so one reading the whole SD per task was the largest repeated cost of a phase. `warnings` with `IDS_NOT_IN_SD` → the task names an FR/TC the SD does not have: fix the task text, or route through `/sf:change`, before spawning. A chore task gets the outline only, which is expected.
    **Known analogs:** from the second task on, also pass the `Analogs:` paths earlier executors reported (deduped, at most ~10), so the next one starts from them instead of re-surveying the codebase.
+
+   **Executor reuse — opt-in (`config.phase.executorReuse`, default `false`).** Absent or `false` → one fresh executor per task, as above; skip this paragraph. When `true`, a fresh executor's first minutes of re-learning the codebase (measured on a 207-executor epic: about a quarter of each task's time) are skipped for **related** tasks:
+   - **Related** = the next task depends on the task this executor just finished, or works in the same component/package/files (judge from `title`/`details` via `task-get`, the same way you judge batch disjointness). Then, once the finished task has gone through steps 3-6, send the next task to the **same** executor with `SendMessage`: the task details, that task's `sd-slice` output, and any FAIL output to fix. The Code Rules, `CONTEXT.md` and analogs are already in its context; re-paste them only if they changed. Still **one task per message**; the executor returns after each, so steps 3-6 keep running per task.
+   - **Not related** (another component, no dependency) → spawn a **fresh** executor with the full spawn prompt above; it loads its own context. Also spawn fresh when the host cannot message a running agent (no `SendMessage`, e.g. Codex), for the extra lanes of a parallel batch, for another feature or worktree, or when the executor is confused after a context compaction (run `/sf:checkpoint` first). The task, its slice and the trace are on disk, so a compacted executor can re-read them (`task-get`).
 
    Before spawning, run `node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs code-rules-list` and paste every returned `## Code Rules` rule (`id` + `text`) **verbatim** into every executor prompt — binding, not "read if present". The list is the project's `## Code Rules` plus its `## Code review checklist` section (older projects keep their real rules there); never pick the bullets out of `project-author.md` by hand — a heading you did not look for turns the whole gate into a silent no-op. Its `warnings` (e.g. `RULES_REVIEWER_OFF`) → tell the user once per run. **Code stays English even when `config.language` ≠ `en`** (that setting is conversation + docs only). **Model:** `config.json → models.hybridExecutor`; non-null → pass as the Agent `model` param, else omit.
 
@@ -243,7 +247,7 @@ Deterministic per-FR complexity (1–10) — this is the **only** complexity sig
 ## Pipeline recap
 ```
 parse-prd (3-phase) → route --sd → wave-plan → [task-next | parallel batch]
-  → sd-slice --task <id> → hybrid-executor (TDD RED) → task-set-status(review) + trace-link + trace-build
+  → sd-slice --task <id> → hybrid-executor (TDD RED; with executorReuse on, related tasks go to the same executor via SendMessage) → task-set-status(review) + trace-link + trace-build
   → verify-code --task <id> → run-checklist smoke (deferrable) → task-set-status(done) → state-update
   → verify-code (full suite, once) → run-checklist regression → verify-collect → VERIFICATION.md
   → [optional gate] review-scope → code-review sub-agent → review-collect → CODE-REVIEW.md → ship

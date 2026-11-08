@@ -635,3 +635,18 @@ test('doctor verify-integrity: a TODO inside a YAML comment is not an unfilled t
       'a TODO in a comment must not read as an unfilled test');
   });
 });
+
+test('init-project: seeds verify.scanPath "src" only when that directory exists, "." otherwise', () => {
+  inTmp(() => {
+    const r = maintenance['init-project']({ stack: 'node' });
+    assert.equal(r.ok, true);
+    const cfg = JSON.parse(fs.readFileSync('.spec-flow/config.json', 'utf8'));
+    assert.equal(cfg.verify.scanPath, '.', 'no src/ → a src scanPath would scan nothing');
+  });
+  inTmp(() => {
+    fs.mkdirSync('src');
+    maintenance['init-project']({ stack: 'node' });
+    const cfg = JSON.parse(fs.readFileSync('.spec-flow/config.json', 'utf8'));
+    assert.equal(cfg.verify.scanPath, 'src', 'src/ exists → keep the preset');
+  });
+});
