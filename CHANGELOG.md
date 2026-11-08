@@ -2,6 +2,12 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [0.18.2] — 2026-11-08
+
+### Fixed
+
+- **A changed FR did not reach the task that implemented it.** `trace-link --fr "FR-084,FR-001"` stored the list as one id, and a re-link replaced the recorded FR (or cleared it when `--fr` was left out). `trace-build` and trace hydration also kept one FR per task. `trace-impact` then returned no task for those FRs, so `/sf:change` could not reopen the task and `task-baseline` missed its TCs. On a real feature, 144 of 2,056 links were affected. `trace-link` now splits the list and adds to what is recorded, and reads split lists that older engines wrote, so existing `file-links.json` files work without a migration. `/sf:phase` and the executor now pass every FR a task implements.
+
 ## [0.18.1] — 2026-11-07
 
 ### Fixed
