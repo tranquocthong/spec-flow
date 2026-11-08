@@ -2,6 +2,13 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [0.18.3] — 2026-11-08
+
+### Fixed
+
+- **Subtasks created by spec-flow could never change status.** Native subtasks (`task-add-subtask`, the expand route of `/sf:phase`) store the full id `3.1`, but the lookup compared it to the bare `1`, so `task-set-status --id 3.1` returned `ERR_TASK_NOT_FOUND` and those subtasks stayed `pending`. The lookup now matches the full id first and the bare number second, so a parent holding both kinds resolves each correctly. `sd-slice --task 3.1` had the same problem and is fixed too.
+- **The executor logged every task to Task Master although that log is off by default.** It ran `update-task --append` on every task, one AI subprocess each, ignoring `config.phase.taskNotes`. It no longer logs; when `taskNotes` is on, `/sf:phase` writes the log from the executor's summary, which now includes error codes and HTTP statuses.
+
 ## [0.18.2] — 2026-11-08
 
 ### Fixed
