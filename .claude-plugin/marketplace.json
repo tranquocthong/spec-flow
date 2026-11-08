@@ -4,14 +4,14 @@
     "name": "Travis Tran"
   },
   "metadata": {
-    "description": "Marketplace for spec-flow — a spec-driven workflow plugin for Claude Code.",
+    "description": "Marketplace for spec-flow: spec-driven development for Claude Code and Codex where done means a real test ran.",
     "version": "0.18.3"
   },
   "plugins": [
     {
       "name": "sf",
       "source": "./",
-      "description": "Approve one design doc; the agent builds it, tests it for real and opens the PR. Lightweight spec-driven development for Claude Code and Codex.",
+      "description": "Spec-driven development for Claude Code and Codex that makes the agent prove its work: approve one design, it builds the code, tests it against your running service and opens the PR.",
       "category": "workflow"
     }
   ],
