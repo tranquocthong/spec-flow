@@ -200,6 +200,17 @@ test('sd-slice --task <parent>.<sub>: reads the subtask text', () => {
   assert.match(r.data.markdown, /PLACE_NOT_FOUND/, 'TC-003 → its error code');
 });
 
+test('bl-002 sd-slice --task <parent>.<sub>: finds a native subtask stored with the full "2.1" id', () => {
+  const dir = seed();
+  const tm = path.join(dir, '.taskmaster', 'tasks', 'tasks.json');
+  const data = JSON.parse(fs.readFileSync(tm, 'utf8'));
+  data.demo.tasks[1].subtasks = [{ id: '2.1', title: 'Handler for FR-002' }];
+  fs.writeFileSync(tm, JSON.stringify(data, null, 2));
+  const r = run(['sd-slice', '--feature', 'demo', '--task', '2.1'], dir);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.data.title, 'Handler for FR-002');
+});
+
 test('sd-slice: a chore task naming no id returns the outline and says so', () => {
   const dir = seed();
   const r = run(['sd-slice', '--feature', 'demo', '--task', '3'], dir);

@@ -1756,6 +1756,24 @@ test('REGRESSION #3 trace-impact: a changed FR reaches the implementing task via
   assert.ok(r.data.impacted.tasks.includes('7'), 'changed FR-001 reaches implementing task 7 (was [] pre-fix)');
 });
 
+test('bl-002 task-set-status: a subtask created by task-add-subtask (stored id "3.2") can change status, even next to a legacy bare id 2', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  const tmDir = path.join(dir, '.taskmaster', 'tasks');
+  fs.mkdirSync(tmDir, { recursive: true });
+  fs.writeFileSync(path.join(tmDir, 'tasks.json'), JSON.stringify({ demo: { tasks: [
+    { id: 3, title: 'parent', status: 'pending', dependencies: [], subtasks: [{ id: 2, title: 'legacy bare id', status: 'pending' }] },
+  ], metadata: {} } }));
+  const add = run(['task-add-subtask', '--parent-id', '3', '--title', 'native', '--tag', 'demo'], dir);
+  assert.equal(add.ok, true, JSON.stringify(add));
+  assert.equal(String(add.data.id), '3.2', 'native subtasks store the full id');
+  const native = run(['task-set-status', '--tag', 'demo', '--id', '3.2', '--status', 'done'], dir);
+  assert.equal(native.ok, true, 'pre-fix: ERR_TASK_NOT_FOUND, so expand-route subtasks stayed pending forever');
+  const subs = JSON.parse(fs.readFileSync(path.join(tmDir, 'tasks.json'), 'utf8')).demo.tasks[0].subtasks;
+  assert.equal(subs.find((s) => String(s.id) === '3.2').status, 'done');
+  assert.equal(subs.find((s) => String(s.id) === '2').status, 'pending', 'the legacy subtask with bare id 2 is untouched');
+});
+
 /** Project with a 3-FR SD at specs/demo/SD.md; returns { dir, sd, fl } paths. */
 function threeFrProject() {
   const dir = tmpProject();
