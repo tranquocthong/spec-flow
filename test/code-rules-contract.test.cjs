@@ -89,6 +89,12 @@ test('agents/hybrid-executor.md step 5: self-check requires Rule | Status | Note
   assert.match(block, /fix it before returning|must be fixed before/i);
 });
 
+test('bl-003 agents/hybrid-executor.md: the executor never runs update-task itself (the orchestrator owns the opt-in log)', () => {
+  const steps = executorMd.slice(executorMd.indexOf('## Steps') >= 0 ? executorMd.indexOf('## Steps') : 0, executorMd.indexOf('## Hard rules'));
+  assert.doesNotMatch(steps, /bin\/task-master update-task/, 'a step still tells the executor to run update-task');
+  assert.match(executorMd, /Do not log to Task Master/);
+});
+
 test('agents/hybrid-executor.md GREEN phase: runs verify-code and fixes any code-rules failure', () => {
   const idx = executorMd.indexOf('GREEN phase');
   assert.ok(idx >= 0);

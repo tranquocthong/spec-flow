@@ -1041,7 +1041,7 @@ const commands = {
       if (!parent) return err(`ERR_TASK_NOT_FOUND: task ${args.task} in tag ${feature}`);
       const textOf = (t) => [t.title, t.description, t.details, t.testStrategy].filter(Boolean).join('\n');
       const subs = Array.isArray(parent.subtasks) ? parent.subtasks : [];
-      const picked = subId ? subs.filter((s) => String(s.id) === subId) : subs;
+      const picked = subId ? [taskCore.findSubtask(subs, parentId, subId)].filter(Boolean) : subs;
       if (subId && !picked.length) return err(`ERR_TASK_NOT_FOUND: subtask ${args.task} in tag ${feature}`);
       taskTitle = (subId ? picked[0].title : parent.title) || null;
       const fromText = sdSlice.idsFromText([textOf(parent), ...picked.map(textOf)].join('\n'));
