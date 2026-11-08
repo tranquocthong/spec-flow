@@ -1756,6 +1756,71 @@ test('REGRESSION #3 trace-impact: a changed FR reaches the implementing task via
   assert.ok(r.data.impacted.tasks.includes('7'), 'changed FR-001 reaches implementing task 7 (was [] pre-fix)');
 });
 
+/** Project with a 3-FR SD at specs/demo/SD.md; returns { dir, sd, fl } paths. */
+function threeFrProject() {
+  const dir = tmpProject();
+  initProject(dir);
+  const sdDir = path.join(dir, '.spec-flow', 'specs', 'demo');
+  fs.mkdirSync(sdDir, { recursive: true });
+  const sd = path.join(sdDir, 'SD.md');
+  fs.writeFileSync(sd, [
+    '# SD: demo', '',
+    '## 5.1 Functional Requirements', '',
+    '| FR ID | Requirement | Priority | Source |',
+    '| --- | --- | --- | --- |',
+    '| FR-001 | Login returns JWT | Must Have | US-1 |',
+    '| FR-002 | Logout revokes JWT | Must Have | US-1 |',
+    '| FR-003 | Refresh rotates JWT | Must Have | US-1 |', '',
+    '## 13.2 Test Cases', '',
+    '| TC ID | Flow | Test Case | Expected Result | FR |',
+    '| --- | --- | --- | --- | --- |',
+    '| TC-001 | Happy path | Valid creds login | JWT 200 | FR-001 |', '',
+  ].join('\n'));
+  return { dir, sd, fl: path.join(sdDir, 'file-links.json') };
+}
+const impactedTasks = (dir, id) => run(['trace-impact', '--feature', 'demo', '--ids', id], dir).data.impacted.tasks;
+
+test('bl-001 trace-link: --fr with a comma list links the task to EVERY listed FR', () => {
+  const { dir, sd, fl } = threeFrProject();
+  const tl = run(['trace-link', '--task', '3', '--feature', 'demo', '--fr', 'FR-001, FR-002,FR-003', '--files', 'src/Auth.java'], dir);
+  assert.equal(tl.ok, true);
+  assert.equal(JSON.parse(fs.readFileSync(fl, 'utf8')).links[0].fr, 'FR-001,FR-002,FR-003', 'stored as the canonical comma list');
+  assert.equal(run(['trace-build', '--sd', sd, '--feature', 'demo'], dir).ok, true);
+  for (const id of ['FR-001', 'FR-002', 'FR-003']) {
+    assert.deepEqual(impactedTasks(dir, id), ['3'], `${id} reaches task 3 (pre-fix only the glued string matched, so each id gave [])`);
+  }
+});
+
+test('bl-001 trace-link: a re-link adds FRs and never drops earlier ones; no --fr keeps them', () => {
+  const { dir, sd, fl } = threeFrProject();
+  run(['trace-link', '--task', '3', '--feature', 'demo', '--fr', 'FR-001', '--files', 'src/Auth.java'], dir);
+  run(['trace-link', '--task', '3', '--feature', 'demo', '--fr', 'FR-002', '--files', 'src/Auth.java'], dir);
+  run(['trace-link', '--task', '3', '--feature', 'demo', '--files', 'src/Auth.java'], dir);
+  const links = JSON.parse(fs.readFileSync(fl, 'utf8')).links;
+  assert.equal(links.length, 1, 'still one entry per (task, file)');
+  assert.equal(links[0].fr, 'FR-001,FR-002', 'pre-fix: the second call overwrote FR-001, the third set null');
+  run(['trace-build', '--sd', sd, '--feature', 'demo'], dir);
+  assert.deepEqual(impactedTasks(dir, 'FR-001'), ['3']);
+  assert.deepEqual(impactedTasks(dir, 'FR-002'), ['3']);
+  assert.deepEqual(impactedTasks(dir, 'FR-003'), []);
+});
+
+test('bl-001 hydrate: a task with different FRs on different files keeps all of them, and old glued entries split on read', () => {
+  const { dir, sd, fl } = threeFrProject();
+  // Shape an older engine wrote: the --fr list verbatim, one FR per file for task 5.
+  fs.writeFileSync(fl, JSON.stringify({ links: [
+    { task: '3', fr: 'FR-001,FR-003', file: 'src/Auth.java', ts: 't' },
+    { task: '5', fr: 'FR-001', file: 'src/A.java', ts: 't' },
+    { task: '5', fr: 'FR-002', file: 'src/B.java', ts: 't' },
+  ] }, null, 2));
+  run(['trace-build', '--sd', sd, '--feature', 'demo'], dir);
+  assert.deepEqual(impactedTasks(dir, 'FR-001').sort(), ['3', '5']);
+  assert.deepEqual(impactedTasks(dir, 'FR-002'), ['5'], 'pre-fix: task 5 kept only its last FR in the task->FR map');
+  assert.deepEqual(impactedTasks(dir, 'FR-003'), ['3']);
+  const files = run(['trace-impact', '--feature', 'demo', '--ids', 'FR-003'], dir).data.impacted.files;
+  assert.ok(files.includes('src/Auth.java'), 'fr-file is per FR too');
+});
+
 test('#3 init-project: auto-detects stack from build markers when --stack omitted', () => {
   // Gradle project, no --stack → java-spring preset (./gradlew test, 80% coverage).
   const g = tmpProject();
