@@ -1,7 +1,7 @@
 {
   "name": "sf",
   "version": "0.18.3",
-  "description": "Approve one design doc; the agent builds it, tests it for real and opens the PR. Lightweight spec-driven development for Claude Code and Codex.",
+  "description": "Spec-driven development for Claude Code and Codex that makes the agent prove its work: approve one design, it builds the code, tests it against your running service and opens the PR.",
   "author": {
     "name": "Travis Tran",
     "url": "https://github.com/tranquocthong"
@@ -23,6 +23,11 @@
     "code-review",
     "requirements-traceability",
     "claude-code",
-    "codex"
+    "codex",
+    "claude-code-plugin",
+    "spec-driven-development",
+    "integration-testing",
+    "ai-coding",
+    "agentic-coding"
   ]
 }
