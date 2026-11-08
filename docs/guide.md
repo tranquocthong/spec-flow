@@ -229,7 +229,7 @@ Two CLIs ship in `bin/`. Both are zero-network and print one JSON line per call.
 | Checklist | `checklist-gen --sd --feature [--type]` | SD section 13.2 into `CHECKLIST.yaml`, HTTP stub for api/hybrid, `live-e2e` scaffold otherwise |
 | | `checklist-status --feature` | classify each test as filled, scaffold, no-verify or live-e2e |
 | Trace | `trace-build --sd [--feature] [--tasks]` | build the per-feature trace, merge `file-links.json`, write the mirror |
-| | `trace-link --task --feature --files [--fr]` | record task-to-file and FR-to-file evidence |
+| | `trace-link --task --feature --files [--fr]` | record task-to-file and FR-to-file evidence; `--fr` takes a comma list, and a re-link adds FRs instead of replacing them |
 | | `trace-impact --ids / --keywords / --changeset` | impacted FR, TC, error, task and file nodes |
 | | `trace-repos --feature [--set]` | declare or read the repo subset a feature targets |
 | | `drift-check --feature` | error codes in code versus SD section 12.2, `spec-not-evidenced` and `impl-not-specced` |
