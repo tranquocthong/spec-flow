@@ -2,7 +2,7 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
-## [Unreleased]
+## [0.19.0] — 2026-11-08
 
 Measured on a 20-feature Go + Next.js epic (207 executors, about 36 hours wall clock): `go test` was 57% of executor tool time, about 11 runs per task, because `verify-code` scoped runs did not work there and executors ran the suite by hand. A fresh executor per task also spent about a quarter of each task re-learning the codebase; for tasks that build on each other that is avoidable, so reusing the executor is now an option.
 
