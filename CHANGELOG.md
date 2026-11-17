@@ -2,6 +2,12 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [0.19.1] — 2026-11-17
+
+### Fixed
+
+- **`phase.executorReuse` could burn a whole usage window on one message.** `SendMessage` to a finished executor re-sends its entire transcript; with the prompt cache cold (idle machine, resumed session, long manual-test, a long-lived executor) that is billed uncached. Reuse is now gated: only within `phase.executorReuseMaxIdleSec` (default 240) of the executor's last return, for at most `phase.executorReuseMaxTasks` (default 3) tasks, and never across a pause, `--resume`, `/sf:checkpoint` or a wait on the user. Anything else, or any doubt, spawns a fresh executor. The option stays default `false`.
+
 ## [0.19.0] — 2026-11-08
 
 Measured on a 20-feature Go + Next.js epic (207 executors, about 36 hours wall clock): `go test` was 57% of executor tool time, about 11 runs per task, because `verify-code` scoped runs did not work there and executors ran the suite by hand. A fresh executor per task also spent about a quarter of each task re-learning the codebase; for tasks that build on each other that is avoidable, so reusing the executor is now an option.
