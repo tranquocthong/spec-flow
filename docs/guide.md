@@ -189,10 +189,10 @@ Everything policy-shaped lives as data in `.spec-flow/config.json`, seeded by `/
 | `confirmTasks` | `true` | Pause after seeding to show the task list before building. |
 | `taskNotes` | `false` | Append an AI-written progress note to each task. Costs one AI call per task; only for a human-readable history. |
 | `codeReview` | `"off"` | Independent review of the finished diff before ship: `"off"`, `"ask"` (asks you each time) or `"always"`. |
-| `executorReuse` | `false` | Keep the executor running across **related** tasks of a feature. A task is related when it depends on the one the executor just finished or works in the same component, package or files; it is handed over with `SendMessage` and skips re-learning the codebase (about a quarter of a task's time on a measured epic). An unrelated task still gets a fresh executor that loads its own context. Hosts without `SendMessage` (Codex) always spawn fresh. Long runs can fill the executor's context; the host compacts it, and the task and its slice stay on disk to re-read. |
+| `executorReuse` | `false` | Keep the executor running across **related** tasks of a feature. A task is related when it depends on the one the executor just finished or works in the same component, package or files; it is handed over with `SendMessage` and skips re-learning the codebase (about a quarter of a task's time on a measured epic). An unrelated task still gets a fresh executor that loads its own context. Hosts without `SendMessage` (Codex) always spawn fresh. Messaging an executor re-sends its whole transcript, which is cheap only while the prompt cache is warm (about 5 minutes). **Cost guard:** reuse only within `executorReuseMaxIdleSec` (default `240`) of the executor's last return and for at most `executorReuseMaxTasks` tasks (default `3`); never across a pause, `--resume`, `/sf:checkpoint` or a wait on you. A cold resume re-bills the full transcript uncached and can exhaust a usage window in one message. Leave this option `false` if you often step away mid-run. |
 
 ```json
-"phase": { "confirmTasks": true, "taskNotes": false, "codeReview": "off", "executorReuse": false }
+"phase": { "confirmTasks": true, "taskNotes": false, "codeReview": "off", "executorReuse": false, "executorReuseMaxIdleSec": 240, "executorReuseMaxTasks": 3 }
 ```
 
 Related options elsewhere: `models.hybridExecutor` picks the executor's model; `verify.testCommand` and `verify.taskTestCommand` decide how much test each task runs (below).

@@ -8,7 +8,7 @@ tools: Read, Write, Edit, Bash, Grep, Glob
 
 You implement ONE task at a time. The SD section is the contract.
 
-**With `phase.executorReuse` on, you may get a related next task of the feature as a follow-up message** once you have returned. Treat it as a new task and run the whole Procedure again for it, against ITS slice: the FR/TC rows of the previous task do not carry over. What does carry over is what you learned about the codebase (analogs, conventions, where things live), so skip re-surveying what you already know. If your context was compacted and you are no longer sure which task you are on, re-read it (`task-get --tag <feature> --id <id>`) and say so in your summary.
+**With `phase.executorReuse` on, you may get a related next task of the feature as a follow-up message** once you have returned (the orchestrator only does so while your prompt cache is warm and you have run few tasks; a stale or long-running executor is replaced by a fresh one). Treat it as a new task and run the whole Procedure again for it, against ITS slice: the FR/TC rows of the previous task do not carry over. What does carry over is what you learned about the codebase (analogs, conventions, where things live), so skip re-surveying what you already know. If your context was compacted and you are no longer sure which task you are on, re-read it (`task-get --tag <feature> --id <id>`) and say so in your summary.
 
 ## Inputs
 - Task (id, title, details, testStrategy) — passed in by the orchestrator (retrieved via `node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs task-get --id <id>`).
