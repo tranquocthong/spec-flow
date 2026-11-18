@@ -244,10 +244,20 @@ test('(6) config.json missing: silently skips, exits 0', async () => {
 });
 
 test('(6) no _inject at all: exits 0 (default config path, which does not exist in test)', async () => {
-  // No inject — will use default .taskmaster/config.json relative to cwd.
-  // In the worktree, this file may or may not exist, but either way must exit 0.
-  const result = await runModels(['--set-main', 'some-model']);
+  // No inject — the default .taskmaster/config.json is resolved against cwd. Run it
+  // from an empty tmp dir: from the repo root this test used to REWRITE a real
+  // .taskmaster/config.json (models.main became "some-model") whenever one existed.
+  const tmpDir = makeTmpDir();
+  const prev = process.cwd();
+  process.chdir(tmpDir);
+  let result;
+  try {
+    result = await runModels(['--set-main', 'some-model']);
+  } finally {
+    process.chdir(prev);
+  }
   assert.equal(result.exitCode, 0, 'no inject must still exit 0');
+  assert.equal(fs.existsSync(path.join(tmpDir, '.taskmaster')), false, 'must not create a config');
 });
 
 // ---------------------------------------------------------------------------

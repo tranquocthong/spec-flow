@@ -1363,6 +1363,137 @@ test('verify-collect: an all-placeholder run reports nothing passed', () => {
   assert.deepEqual(r.data.truths, [], 'no truths at all — nothing was executed');
 });
 
+// --- verify-collect: ## Summary from the runner's optional `tests` rows ---------
+
+const SUMMARY_RESULT = {
+  passed: ['TC-1', 'TC-4'],
+  failed: [{ id: 'TC-2', reason: 'status 500' }],
+  notVerified: [{ id: 'TC-3', reason: 'no request' }],
+  teardownWarnings: [],
+  tests: [
+    { id: 'TC-1', suite: 'suite-1', suiteName: 'Create plan', status: 'passed', evidence: 'live' },
+    { id: 'TC-2', suite: 'suite-1', suiteName: 'Create plan', status: 'failed', evidence: 'automated' },
+    { id: 'TC-3', suite: 'suite-2', suiteName: null, status: 'not_verified', evidence: null },
+    { id: 'TC-4', suite: 'suite-2', suiteName: null, status: 'passed', evidence: 'live' },
+  ],
+};
+const verificationOf = (dir, feature = 'demo') =>
+  fs.readFileSync(path.join(dir, '.spec-flow', 'specs', feature, 'VERIFICATION.md'), 'utf8');
+
+test('verify-collect: failures plus not-verified tests do not claim status incomplete', () => {
+  // The "status is incomplete" note was printed whenever notVerified was non-empty,
+  // even when a failure made the status `failed` — the file contradicted itself.
+  const dir = tmpProject();
+  initProject(dir);
+  const r = run(['verify-collect', '--feature', 'demo', '--results',
+    '{"passed":[],"failed":[{"id":"TC-1","reason":"x"}],"notVerified":[{"id":"TC-2","reason":"y"}]}'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.status, 'failed');
+  const md = fs.readFileSync(path.join(dir, '.spec-flow', 'specs', 'demo', 'VERIFICATION.md'), 'utf8');
+  assert.match(md, /^status: failed$/m);
+  assert.doesNotMatch(md, /is `incomplete`/, 'no note contradicting the status');
+  assert.match(md, /TC-2:\s*NOT VERIFIED/, 'the not-verified test is still listed');
+});
+
+test('verify-collect: tests rows produce per-suite and per-evidence summary tables', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  const r = run(['verify-collect', '--feature', 'demo', '--results', JSON.stringify(SUMMARY_RESULT)], dir);
+  assert.equal(r.ok, true);
+  const md = verificationOf(dir);
+  assert.ok(md.includes([
+    '## Summary', '',
+    '### By suite', '',
+    '| Suite | Passed | Failed | Not verified | Total |',
+    '| --- | ---: | ---: | ---: | ---: |',
+    '| suite-1 — Create plan | 1 | 1 | 0 | 2 |',
+    '| suite-2 | 1 | 0 | 1 | 2 |',
+    '| **Total** | 2 | 1 | 1 | 4 |', '',
+    '### By evidence', '',
+    '| Evidence | Passed | Failed | Not verified | Total |',
+    '| --- | ---: | ---: | ---: | ---: |',
+    '| live | 2 | 0 | 0 | 2 |',
+    '| automated | 0 | 1 | 0 | 1 |',
+    '| (unlabelled) | 0 | 0 | 1 | 1 |',
+    '| **Total** | 2 | 1 | 1 | 4 |',
+  ].join('\n')), md);
+  // Placement: after the "Recorded by" block, before ## must_haves.
+  assert.ok(md.indexOf('> Recorded by') < md.indexOf('## Summary'), 'summary follows the Recorded by line');
+  assert.ok(md.indexOf('Do not mark them verified') < md.indexOf('## Summary'), 'summary follows the whole Recorded by block');
+  assert.ok(md.indexOf('## Summary') < md.indexOf('## must_haves'), 'summary precedes must_haves');
+  assert.match(md, /^status:\s*failed/m, 'status is unchanged by the summary');
+  assert.deepEqual(r.data.summary.total, { passed: 2, failed: 1, notVerified: 1, total: 4 });
+  assert.equal(r.data.summary.bySuite[0].label, 'suite-1 — Create plan');
+  assert.equal(r.data.summary.byEvidence.length, 3);
+  assert.deepEqual(r.data.summary.mismatches, []);
+});
+
+test('verify-collect: no evidence labels means no per-evidence table', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  const result = { ...SUMMARY_RESULT, tests: SUMMARY_RESULT.tests.map(t => ({ ...t, evidence: null })) };
+  const r = run(['verify-collect', '--feature', 'demo', '--results', JSON.stringify(result)], dir);
+  assert.equal(r.ok, true);
+  const md = verificationOf(dir);
+  assert.match(md, /### By suite/);
+  assert.doesNotMatch(md, /By evidence/, 'no evidence table when nothing is labelled');
+  assert.doesNotMatch(md, /\(unlabelled\)/);
+  assert.equal(r.data.summary.byEvidence, null);
+});
+
+test('verify-collect: without tests rows VERIFICATION.md is unchanged (no summary)', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  const r = run(['verify-collect', '--feature', 'demo', '--results',
+    '{"passed":["TC-001"],"failed":[{"id":"TC-002","reason":"status 500"}]}'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.summary, null);
+  assert.equal(verificationOf(dir), [
+    '# VERIFICATION — demo', '',
+    'status: failed', '',
+    '> Recorded by `verify-collect` from the checklist runner\'s result: 1 passed, 1 failed.', '',
+    '## must_haves', '',
+    '### truths', '',
+    '- TC-001: verified', '',
+    '## Failures', '',
+    '- TC-002: FAILED — status 500', '',
+  ].join('\n'));
+});
+
+test('verify-collect: tests disagreeing with the result lists do not crash; the lists decide status', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  const result = {
+    passed: ['TC-1', 'TC-9'],          // TC-9 is missing from tests
+    failed: [{ id: 'TC-2', reason: 'boom' }],
+    tests: [
+      { id: 'TC-1', suite: 'suite-1', suiteName: 'A', status: 'passed', evidence: null },
+      { id: 'TC-2', suite: 'suite-1', suiteName: 'A', status: 'passed', evidence: null }, // lists say failed
+      { id: 'TC-7', suite: 'suite-2', suiteName: null, status: 'failed', evidence: null }, // in no list
+    ],
+  };
+  const r = run(['verify-collect', '--feature', 'demo', '--results', JSON.stringify(result)], dir);
+  assert.equal(r.ok, true);
+  const md = verificationOf(dir);
+  assert.match(md, /^\| suite-1 — A \| 1 \| 1 \| 0 \| 2 \|$/m, 'TC-2 counted as failed (lists win over its own row)');
+  assert.match(md, /^\| suite-2 \| 0 \| 1 \| 0 \| 1 \|$/m, 'a tests-only id keeps its own status');
+  assert.match(md, /^\| \(no suite\) \| 1 \| 0 \| 0 \| 1 \|$/m, 'a list-only id is still counted');
+  const ids = r.data.summary.mismatches.map(m => m.id).sort();
+  assert.deepEqual(ids, ['TC-2', 'TC-7', 'TC-9']);
+  assert.match(md, /3 test id\(s\) disagree/);
+});
+
+test('verify-collect: reads tests rows from a last-result.json file too', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  const file = path.join(dir, 'last-result.json');
+  fs.writeFileSync(file, JSON.stringify(SUMMARY_RESULT, null, 2));
+  const r = run(['verify-collect', '--feature', 'demo', '--results', file], dir);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.data.summary.total, { passed: 2, failed: 1, notVerified: 1, total: 4 });
+  assert.match(verificationOf(dir), /## Summary/);
+});
+
 // ---------------------------------------------------------------------------
 // Language pack — SRS-parsing keywords are DATA, loaded per config.language
 // ---------------------------------------------------------------------------

@@ -65,12 +65,26 @@ def resolve_db(spec, default_db, dbs):
     return got
 
 
+# Seconds before one SQL statement counts as hung (a lock wait on a shared
+# Postgres, an unreachable host). The runner sets it from the run default.
+TIMEOUT = 300.0
+
+
 def run_sql(sql, db, scripts_dir):
     cmd = [os.path.join(scripts_dir, "db-query.sh"), sql, "-t"] + db_flags(db)
     try:
-        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode()
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"db-query.sh failed on '{db_label(db)}' (exit {e.returncode})") from e
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"SQL on '{db_label(db)}' hung: no result after {TIMEOUT:g}s — "
+                           f"{sql.strip()[:200]}") from e
+    if p.returncode != 0:
+        # psql's own message (role does not exist, relation missing, psql not found)
+        # is the whole diagnosis; it used to be thrown away with stderr=DEVNULL.
+        why = " ".join(l for l in (p.stderr or "").strip().splitlines()
+                       if not l.startswith("[db-creds.sh]"))[-300:]
+        raise RuntimeError(f"db-query.sh failed on '{db_label(db)}' (exit {p.returncode})"
+                           + (f": {why}" if why else ""))
+    out = p.stdout or ""
     lines = [l for l in out.splitlines() if l and not l.startswith("[db-creds.sh]")]
     return "\n".join(lines).strip()
 

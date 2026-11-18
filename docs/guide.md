@@ -246,7 +246,7 @@ Two CLIs ship in `bin/`. Both are zero-network and print one JSON line per call.
 | | `trace-impact --ids / --keywords / --changeset` | impacted FR, TC, error, task and file nodes |
 | | `trace-repos --feature [--set]` | declare or read the repo subset a feature targets |
 | | `drift-check --feature` | error codes in code versus SD section 12.2, `spec-not-evidenced` and `impl-not-specced` |
-| Verify | `verify-collect --results` | runner output into `VERIFICATION.md` truths, `notVerified` holds status at `incomplete` |
+| Verify | `verify-collect --results` | runner output into `VERIFICATION.md` truths, `notVerified` holds status at `incomplete`; when the result carries `tests` rows it also writes a `## Summary` with per-suite (and, if rows carry an `evidence` label, per-evidence) counts |
 | | `verify-code [--feature] [--repos]` | tests, coverage, forbidden patterns, secret scan, scoped to the repos a feature touched |
 | Review | `review-scope [--feature]` | whether the optional pre-ship review runs (`config.phase.codeReview`: off by default, or ask, always) and over what: base branch, `<base>...HEAD`, the files from `file-links.json`, plus any prior verdict and whether HEAD moved past it |
 | | `review-collect --feature --findings [--target]` | reviewer findings into `CODE-REVIEW.md`, verdict `clean`, `advisory` or `blocking` (any critical/high) |
@@ -260,6 +260,7 @@ Two CLIs ship in `bin/`. Both are zero-network and print one JSON line per call.
 | Records | `bug-new` / `bug-list` | bug records in `.spec-flow/bugs/` |
 | | `backlog-new --title --priority high\|medium\|low` / `backlog-list [--status] [--epic] [--feature]` / `backlog-set --id [--priority] [--status]` | deferred-work records in `.spec-flow/backlog/`, listed in priority order; priority is required on create; hand-written files without the record marker are still listed (`legacy`, priority `unset`) and never rewritten by a list |
 | | `epic-new --name [--subs]` / `epic-attach --epic --feature` / `epic-list` / `epic-show --epic` | epic workspaces: `.spec-flow/epics/<slug>/` with `EPIC.md` plus `srs/ decisions/ state/ assets/` for cross-phase docs; a feature joins one epic (`specs/<feature>/EPIC` points back); progress is computed from each sub-feature's tasks and ship record; single-file epics still read, never auto-migrated |
+| | `epic-close --epic [--dry-run]` | close an epic once every sub-feature's `VERIFICATION.md` passes the ship gate (`passed` or `verified-adhoc`); lists every blocker at once and writes nothing if any; otherwise writes a `## Close-out` table to `EPIC.md` (counts from the verify-collect summary or record, else `run/last-result.json`; hand-written records are listed as not counted) and sets `status: closed`; re-runnable |
 | | `branch-ensure --kind sd\|bug\|change` | create or switch the work branch from config templates, no-op off base |
 | Tasks | `task-add`, `task-get`, `task-list`, `task-next`, `task-set-status`, `task-update` | CRUD on `.taskmaster/tasks/tasks.json` per tag |
 | | `task-use-tag`, `task-add-dep`, `task-remove-dep`, `task-add-subtask`, `task-expand` | tag switching, dependencies with cycle detection, subtasks |

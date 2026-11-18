@@ -21,7 +21,10 @@ When `/manual-test [args]` is invoked:
    PGPASSWORD=<pass> psql -h <host> -p <port> -U <user> -d <db> \
      -c "SELECT * FROM <main_entity_table> WHERE status='ACTIVE' LIMIT 1"
    ```
-3. **Generate tokens** — base64-encode token payloads from the `tokens` section, substituting resolved variables (always `tr -d '\n'`).
+3. **Environment + preflight** — `run-checklist.sh` sources `<checklist dir>/run/env.sh`
+   when it exists (tokens, `DB_USER`, fixture ids — `run/` is git-ignored automatically),
+   then lists every `${VAR}` the selected tests need that nothing sets and stops before
+   anything runs. Tokens are resolved lazily, when a test first uses them.
 4. **Filter tests by argument:**
 
    | Argument | Effect |
@@ -30,6 +33,7 @@ When `/manual-test [args]` is invoked:
    | `regression` | Run ALL tests |
    | `suite:NAME` | Run named suite, e.g. `suite:limits-runtime` |
    | `id:RT-003` | Run a single test by ID |
+   | `--rerun-failed` | Only the tests that FAILED last time (`run/last-result.json`); merged back |
 
 5. **For each test:**
    1. Run `setup` (`sql` | `seed` ref | `http`+`capture` | `redis` | `exec` | `vars`)
@@ -37,7 +41,7 @@ When `/manual-test [args]` is invoked:
    3. Check `expect` (see Assertion Grammar below)
    4. Run `verify` SQL/Kafka queries (if present)
    5. Run `teardown` to restore state
-   6. Report PASS / FAIL with details
+   6. Report PASS / FAIL / NOT VERIFIED with details
 6. **Run global `cleanup.all`** after all suites complete.
 7. **Output results** in markdown table — see `references/results.md`.
 
@@ -66,8 +70,31 @@ Under `verify:`
   result (single column/row). A **dict** `expect:` (multi-column) is printed for
   context only (descriptive) — `db-query.sh -t` has no headers to map by name, so
   assert each column as its own scalar row, or via `json_path` on the API response.
+- `- exec: "cmd"  [expect: <scalar | "<op> value">]` → the command must exit 0; an
+  `expect:` also asserts its trimmed stdout. Same `timeout:` / `retry:` / `retry_on:`
+  as a setup `exec` step.
 - `- kafka_consumer_lag / kafka_dlt / kafka_topic` → **best-effort**: runs when `kcat`
   or a kafka docker container is present, otherwise **SKIP** (not FAIL) with a note.
+- Any other key is a **FAIL** (`unknown keys (...)`), and lint rejects it first. It used
+  to be a silent no-op that let the row PASS without its check running.
+
+**PASS needs evidence.** A test passes only when at least one check actually asserted
+at runtime: a response `expect` key, a `poll`, a scalar `verify` (sql / exec / kafka
+that was not skipped), or an executing setup step (`exec` / `sql` / `http` / `kafka`).
+A row with nothing to run, or whose every check was skipped or descriptive, is
+**NOT VERIFIED** — never counted as passed. The optional free-form `evidence:` label
+on a row (`live`, `automated`, `none`, ...) is carried into the result and summarised
+by label in VERIFICATION.md; it does not change the outcome.
+
+**Timeouts.** Every `exec` (setup / teardown / verify) and every SQL statement has a
+timeout: the step's `timeout:`, else the test's `timeout:`, else `config.step_timeout`,
+else env `CHECKLIST_STEP_TIMEOUT`, else **5m**. Seconds or `"90s"` / `"5m"` / `"1h"`.
+A step that outlives it is killed with its child processes and the test FAILs with
+`step hung`. `retry: N` re-runs a non-zero exit; add `retry_on: "<regex>"` (e.g.
+`"context deadline exceeded"` for a migration lock lost to a parallel run) so a real
+assertion failure is never retried into a green. A hang is never retried. The runner
+itself runs tests one at a time; lock contention comes from parallelism inside the
+command (`go test -p N`) or from other runs on a shared database.
 
 Auto-injected vars: `${TEST_CORRELATION_ID}` (stable per run) and `${TEST_START}`
 (refreshed per test, UTC in Postgres `now()::text` format so lexicographic
@@ -80,9 +107,16 @@ one with `db_ref: <name>` — the DB-side twin of `base_url_ref:`. Without it a 
 spanning two services could only be verified on the near side, and the far side had
 to be inferred from an HTTP side-channel. An undefined `db_ref` **fails the test**; it
 does not fall back to the default database, because querying the wrong server would
-report a green PASS. Only `database:` is read from `config.db` — host/port/user/
-password come from `db-creds.sh` discovery, and a `databases:` entry likewise
-inherits every field it does not set.
+report a green PASS. `config.db` takes `database`, `host`, `port`, `user` (alias
+`username`) and `password`; with only `database:` set, the rest comes from
+`db-creds.sh` discovery as before. A `databases:` entry inherits every field it does
+not set from `config.db`, then from discovery.
+
+**psql.** SQL runs through `db-query.sh` → `psql` on PATH. Without a local client set
+`manualTest.psql` in `.spec-flow/config.json`: a command prefix
+(`"/opt/pg16/bin/psql"`) or `{"container": "<postgres container>"}` to run psql inside
+Docker (host/port dropped, `PGOPTIONS` forwarded). Env `SF_PSQL` / `SF_PSQL_CONTAINER`
+override it.
 
 A `sql` setup step may also carry `expect:` — a **pre-state guard**. Scalar `expect`
 is a hard assertion: on mismatch the setup aborts and the test FAILs instead of
@@ -102,24 +136,28 @@ The canonical, runnable, fully-annotated example is **`templates/CHECKLIST.yaml`
 (copy it to start a new checklist). The top-level shape:
 
 ```yaml
-config:   { base_url, base_urls: {<name>: url}, db: {database},
+config:   { base_url, base_urls: {<name>: url}, db: {database, host, port, user, password},
             databases: {<name>: <db-name> | {database, host, port, user, password}},
-            redis: {host, port}, vars: {NAME: value} }
-tokens:   { <name>: { payload | auth: keycloak_ropc | type: keycloak-client-credentials } }
+            redis: {host, port}, vars: {NAME: value}, step_timeout: 5m }
+tokens:   { <name>: { payload | bearer | cookie | auth: keycloak_ropc
+                      | type: keycloak-client-credentials
+                      | http: {method, path, body}, token_path, capture, scope } }
 seed:     { <name>: <SQL snippet> }      # referenced from setup via `- seed: <name>`
 cleanup:  { all: <SQL> }                 # runs once after all suites
 suites:
   - id: <suite>
-    setup: [...]                         # sql | seed | http(+capture) | redis | exec | vars
+    setup: [...]                         # sql | seed | http(+capture) | redis | exec | kafka | vars
     tests:
       - id: <TEST-ID>
         tags: [smoke, ...]
+        evidence: live                   # optional free-form label, reported per label
+        timeout: 10m                     # optional default for this test's exec/SQL steps
         setup: [...]                     # per-test
         request:                         # exactly ONE of http / kafka:
           method/path/token/body         #   http
           kafka: {topic, payload|payload_file, key, headers}
         expect: { ... }                  # see Assertion Grammar above
-        verify: [ {sql, expect} | {kafka_consumer_lag|kafka_dlt|kafka_topic} ]
+        verify: [ {sql, expect} | {exec, expect?} | {kafka_consumer_lag|kafka_dlt|kafka_topic} ]
         teardown: [...]
 ```
 
@@ -142,7 +180,33 @@ Each test has exactly one `request` block. Pick the shape that matches the featu
 `token:` names an entry in the top-level `tokens:` map. **For an unauthenticated
 request — the 401/anonymous-access tests — write `token: none` or leave `token:` out
 entirely.** Both send zero auth headers. Any other unmatched name is a real error
-(the runner lists the declared token names so you can spot the typo).
+(the runner lists the declared token names so you can spot the typo) — in a setup
+`http:` step too, where an unknown name used to send the call without auth.
+
+**Login tokens.** When the API mints its own tokens (register / login endpoint),
+declare the token instead of registering in every row and passing
+`Authorization: Bearer ${TOK}` through `headers:`:
+
+```yaml
+tokens:
+  owner:                                   # one account for the whole run
+    http: {method: POST, path: /auth.v1.AuthService/LoginWithEmail,
+           headers: {Connect-Protocol-Version: "1"},
+           body: {email: "${OWNER_EMAIL}", password: "${OWNER_PASSWORD}"}}
+    token_path: "$.result.tokens.accessToken"
+    capture: {OWNER_ID: "$.result.accountId"}
+  newcomer:                                # a FRESH account for every test
+    http: {method: POST, path: /auth.v1.AuthService/RegisterWithEmail,
+           body: {email: "mt-${TEST_CORRELATION_ID}-${TEST_START}@example.test", password: "${NEWCOMER_PASSWORD}"}}
+    token_path: "$.result.tokens.accessToken"
+    capture: {ACC: "$.result.accountId"}
+    scope: test                            # run (default) | suite | test
+```
+
+`scope: test` tokens are minted before the test's setup, so `capture:` vars (`${ACC}`)
+are usable in every step of that test. A failed login fails the tests that use the
+token, not the whole run. `bearer:` / `cookie:` / `payload:` are re-expanded on every
+use, so `bearer: "${TOK}"` also works with a `TOK` captured earlier in the same test.
 
 For Kafka tests, `expect` has no HTTP `status` — use `poll` (poll DB/Redis until the expected state) to settle the async consumer.
 
@@ -161,7 +225,11 @@ Full Kafka mechanics + helpers: `references/kafka-events.md`.
    expanded, so `FOO: ${FOO:-default}` keeps an env override possible)
 2. Auto-discovered values from DB query
 3. Test-level `- vars: {NAME: value}` steps in setup blocks (and `capture:` vars)
-4. Environment variables (`${VAR:-default}` inline defaults as last resort)
+4. Environment variables — including those from `run/env.sh` (`${VAR:-default}`
+   inline defaults as last resort)
+
+A `${VAR}` without a default that none of these provides is reported by the
+preflight before the run starts (`--no-preflight` skips it).
 
 ## Execution Notes
 
