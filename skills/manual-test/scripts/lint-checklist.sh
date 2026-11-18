@@ -126,7 +126,77 @@ def walk_refs(node, where):
 
 walk_refs(doc, "$")
 
+# Unknown step / verify kinds. The runner fails them at run time now, but a typo
+# (`verify: - exec:` written before the runner knew it, `setup: - sleep: 2`) is a
+# lint error first — it used to be a silent no-op that let the row PASS.
+from checklist_lib import grammar as _g  # noqa: E402
+from checklist_lib.proc import parse_duration as _dur  # noqa: E402
+
+def _check_step_opts(node, where):
+    if "timeout" in node:
+        try:
+            _dur(node["timeout"])
+        except ValueError as e:
+            issues.append(f"{where}.timeout: {e}")
+    if "retry" in node and (isinstance(node["retry"], bool) or not isinstance(node["retry"], int) or node["retry"] < 0):
+        issues.append(f"{where}.retry: must be a non-negative integer, got {node['retry']!r}")
+    if "retry_on" in node:
+        try:
+            re.compile(str(node["retry_on"]))
+        except re.error as e:
+            issues.append(f"{where}.retry_on: invalid regex — {e}")
+
+def _check_steps(steps, where):
+    if steps is None:
+        return
+    if not isinstance(steps, list):
+        issues.append(f"{where}: must be a list of steps")
+        return
+    for i, st in enumerate(steps):
+        if _g.step_kind(st) is None:
+            issues.append(f"{where}[{i}]: {_g.describe_unknown(st, _g.STEP_KINDS)}")
+        elif isinstance(st, dict):
+            _check_step_opts(st, f"{where}[{i}]")
+
+try:
+    _dur(_cfg.get("step_timeout"))
+except ValueError as e:
+    issues.append(f"$.config.step_timeout: {e}")
+
+for _tn, _td in (doc.get("tokens") or {}).items():
+    _w = f"$.tokens.{_tn}"
+    if not isinstance(_td, dict):
+        issues.append(f"{_w}: a token def must be a mapping")
+        continue
+    if "http" in _td:
+        if not isinstance(_td["http"], dict) or not _td["http"].get("path"):
+            issues.append(f"{_w}.http: needs at least `path:` (and usually method/body)")
+        if not _td.get("token_path"):
+            issues.append(f"{_w}: an `http:` token needs `token_path:` — the JSON path of the token in the response (e.g. \"$.accessToken\")")
+    if "scope" in _td and str(_td["scope"]) not in ("run", "suite", "test"):
+        issues.append(f"{_w}.scope: {_td['scope']!r} — use run, suite or test")
+
 suites = doc.get("suites", [])
+for _si, _su in enumerate(suites or []):
+    _check_steps(_su.get("setup"), f"$.suites[{_si}].setup")
+    for _ti, _t in enumerate(_su.get("tests") or []):
+        _w = f"$.suites[{_si}].tests[{_ti}] ({_t.get('id', '?')})"
+        _check_steps(_t.get("setup"), f"{_w}.setup")
+        _check_steps(_t.get("teardown"), f"{_w}.teardown")
+        if "timeout" in _t:
+            try:
+                _dur(_t["timeout"])
+            except ValueError as e:
+                issues.append(f"{_w}.timeout: {e}")
+        _v = _t.get("verify")
+        if _v is not None and not isinstance(_v, list):
+            issues.append(f"{_w}.verify: must be a list of items")
+        for _vi, _it in enumerate(_v if isinstance(_v, list) else []):
+            if _g.verify_kind(_it) is None:
+                issues.append(f"{_w}.verify[{_vi}]: {_g.describe_unknown(_it, _g.VERIFY_KINDS)}")
+            elif "exec" in _it:
+                _check_step_opts(_it, f"{_w}.verify[{_vi}]")
+
 if not suites:
     issues.append("$.suites: no suites defined — checklist is empty")
 for si, suite in enumerate(suites):

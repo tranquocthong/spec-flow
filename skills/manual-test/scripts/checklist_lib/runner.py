@@ -7,6 +7,7 @@ to add a YAML block.
 """
 import argparse
 import json
+import os
 import sys
 
 try:
@@ -15,7 +16,7 @@ except ImportError:
     print("ERROR: PyYAML required. Install: pip3 install pyyaml", file=sys.stderr)
     sys.exit(2)
 
-from . import assertions, auth, http, kafka, setup, sql
+from . import assertions, auth, grammar, http, kafka, preflight, proc, results, setup, sql
 from .vars import VarStore
 
 GREEN, RED, YELLOW, RESET, BOLD = "\033[32m", "\033[31m", "\033[33m", "\033[0m", "\033[1m"
@@ -34,6 +35,12 @@ def parse_args(argv=None):
     p.add_argument("--id", dest="test_id", default=None)
     p.add_argument("--base-url", default=None)
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--rerun-failed", action="store_true",
+                   help="run only the tests whose last recorded result (run/last-result.json) is FAIL")
+    p.add_argument("--results-file", default=None,
+                   help="where to keep the merged last result (default: <checklist dir>/run/last-result.json)")
+    p.add_argument("--no-preflight", action="store_true",
+                   help="skip the missing-variable check before the run")
     p.add_argument("--json", action="store_true",
                    help="emit a final machine-readable JSON line "
                         '{"passed":[...],"failed":[{"id","reason"}]} for verify-collect')
@@ -86,13 +93,10 @@ def _send_request(req, ctx):
     if tname and str(tname).strip().lower() in _NO_TOKEN and tname not in ctx["tokens"]:
         tname = None
     if tname:
-        if tname not in ctx["tokens"]:
-            known = ", ".join(sorted(ctx["tokens"])) or "(none declared)"
-            return ("error", None,
-                    f"unknown token '{tname}' — declared tokens: {known}. "
-                    f"For an unauthenticated request use `token: none` or omit `token:`.",
-                    None)
-        k, v = ctx["tokens"][tname]
+        try:
+            k, v = auth.header_for(tname, ctx)
+        except Exception as e:
+            return ("error", None, str(e), None)
         headers[k] = v
     # Explicit per-test headers (var-expanded). Applied after the token so a test
     # that sets a header wins. Without this, signed requests (X-Client-Id /
@@ -105,23 +109,45 @@ def _send_request(req, ctx):
     return ("http", status, jbody, raw)
 
 
-def _run_verify(verify_block, ctx, errs, msgs):
-    sql_items = [v for v in verify_block if "sql" in v]
-    if sql_items:
-        ok, verrs, vmsgs = sql.verify_sql(sql_items, ctx["db"], ctx["scripts_dir"],
-                                          ctx["varstore"], ctx.get("dbs"))
-        errs.extend(verrs)
-        msgs.extend(vmsgs)
-    for vb in verify_block:
-        if "sql" in vb:
+def _run_verify(verify_block, ctx, errs, msgs, evidence=None):
+    """Run every verify item in order. An item of no known kind is a FAILURE: it
+    used to fall through to the kafka dispatcher, come back "skipped" and leave the
+    test green although its check never ran (an `exec:` item, for one)."""
+    evidence = evidence if evidence is not None else []
+    vs = ctx["varstore"]
+    for i, vb in enumerate(verify_block):
+        kind = grammar.verify_kind(vb)
+        if kind is None:
+            errs.append(f"verify[{i}]: {grammar.describe_unknown(vb, grammar.VERIFY_KINDS)}")
             continue
-        status, detail = kafka.check(vb, ctx["varstore"])
-        if status is None:
-            msgs.append(f"      {YELLOW}skip:{RESET} {detail}")
-        elif status:
-            msgs.append(f"      verify OK: {detail}")
+        if kind == "sql":
+            _, verrs, vmsgs = sql.verify_sql([vb], ctx["db"], ctx["scripts_dir"], vs, ctx.get("dbs"))
+            errs.extend(verrs)
+            msgs.extend(vmsgs)
+            exp = vb.get("expect")
+            if not verrs and exp is not None and not isinstance(exp, dict):
+                evidence.append("verify sql")
+        elif kind == "exec":
+            try:
+                out = setup.run_exec(vb, ctx, label="verify exec")
+            except Exception as e:
+                errs.append(str(e))
+                continue
+            ok, detail = sql.check_scalar(out, vb.get("expect"), vs)
+            if ok is False:
+                errs.append(f"verify exec: {detail}")
+                continue
+            evidence.append("verify exec")
+            msgs.append(f"      verify OK: exec{(' ' + detail) if detail else ' exit 0'}")
         else:
-            errs.append(f"kafka verify: {detail}")
+            status, detail = kafka.check(vb, vs)
+            if status is None:
+                msgs.append(f"      {YELLOW}skip:{RESET} {detail}")
+            elif status:
+                evidence.append(f"verify {kind}")
+                msgs.append(f"      verify OK: {detail}")
+            else:
+                errs.append(f"kafka verify: {detail}")
 
 
 # Keys inside `expect` that assert_expect (or the runner's own poll branch) turns
@@ -132,7 +158,7 @@ _ASSERTING_EXPECT_KEYS = {"status", "body_contains", "body_not_contains",
 # Setup steps that actually run something. run_steps aborts on the first failure
 # and the caller turns that into a FAIL, so `setup: - exec: ... exit 1` IS a real
 # assertion even though the test declares no `expect` at all.
-_EXECUTING_SETUP_KEYS = {"exec", "sql", "kafka", "http"}
+_EXECUTING_SETUP_KEYS = grammar.EXECUTING_STEP_KINDS
 
 
 def _unexecutable_reason(test):
@@ -159,6 +185,39 @@ def _unexecutable_reason(test):
     return f"no request, no assertion, no executing setup step{hint} — run it by hand"
 
 
+def _db_config(cfg, vs):
+    """config.db → the default database: a plain name when only `database:` is set
+    (db-creds.sh discovers the rest, as before), else a connection spec.
+
+    host/port/user/password used to be IGNORED here — only `database:` was read —
+    so a checklist that declared `port: 7110` and `username: app_user` still hit
+    whatever db-creds.sh discovered, and the user had to export DB_USER by hand.
+    `username:` is accepted as an alias of `user:`."""
+    raw = cfg.get("db") or {}
+    name = vs.expand(str(raw.get("database", "${DB_NAME:-postgres}")))
+    spec = {"database": name}
+    for key, alias in (("host", None), ("port", None), ("user", "username"), ("password", None)):
+        val = raw.get(key, raw.get(alias) if alias else None)
+        if val is not None and str(val) != "":
+            spec[key] = vs.expand(str(val))
+    return name, (spec if len(spec) > 1 else name)
+
+
+def _inherit(spec, default_db):
+    """A config.databases entry lives on the default server unless it says otherwise."""
+    if not isinstance(default_db, dict):
+        return spec
+    base = {k: v for k, v in default_db.items() if k != "database"}
+    if isinstance(spec, dict):
+        return {**base, **spec}
+    return {**base, "database": spec}
+
+
+def _status_line(entry):
+    return {"passed": f"{GREEN}✓ PASS{RESET}", "failed": f"{RED}✗ FAIL{RESET}",
+            "not_verified": f"{YELLOW}— NOT VERIFIED{RESET}"}[entry["status"]]
+
+
 def main(argv=None):
     args = parse_args(argv)
     try:
@@ -179,24 +238,41 @@ def main(argv=None):
     for k, v in (cfg.get("vars") or {}).items():
         vs.set(k, vs.expand(str(v)))
     base_url = args.base_url or vs.expand(cfg.get("base_url", "http://localhost:8081"))
-    db_name = vs.expand(str((cfg.get("db") or {}).get("database", "${DB_NAME:-postgres}")))
+    db_name, db_default = _db_config(cfg, vs)
     # Multi-service: named alternate base URLs (e.g. {auth_base_url: ...}). A test or
     # setup step picks one with `base_url_ref: <name>`; default stays `base_url`.
     base_urls = {k: vs.expand(str(v)) for k, v in (cfg.get("base_urls") or {}).items()}
     # Multi-service, DB side: named alternate databases, symmetric with base_urls. A
-    # feature spanning two services (wallet_db@5432 + payment_db@2432) could not be
-    # SQL-verified on the far side at all — every step shared one connection — which
-    # forced tests to prove a downstream write through an HTTP side-channel instead.
-    # A value is either a plain database NAME (same server) or a mapping with any of
-    # database/host/port/user/password; unset fields fall back to db-creds.sh.
-    dbs = {k: _db_spec(v, vs, db_name) for k, v in (cfg.get("databases") or {}).items()}
+    # value is either a plain database NAME (same server as config.db) or a mapping
+    # with any of database/host/port/user/password; unset fields fall back to
+    # config.db, then to db-creds.sh.
+    dbs = {k: _inherit(_db_spec(v, vs, db_name), db_default)
+           for k, v in (cfg.get("databases") or {}).items()}
 
-    ctx = {"db": db_name, "dbs": dbs, "scripts_dir": args.scripts_dir, "base_url": base_url,
-           "base_urls": base_urls, "varstore": vs, "tokens": {}, "doc": doc}
+    try:
+        default_timeout = proc.default_timeout(cfg)
+    except ValueError as e:
+        print(f"{RED}config.step_timeout: {e}{RESET}")
+        return 2
+    sql.TIMEOUT = default_timeout
+
+    # Tokens are resolved lazily (auth.header_for), only when a test uses them.
+    ctx = {"db": db_default, "dbs": dbs, "scripts_dir": args.scripts_dir, "base_url": base_url,
+           "base_urls": base_urls, "varstore": vs, "tokens": dict(doc.get("tokens") or {}),
+           "doc": doc, "default_timeout": default_timeout}
+
+    results_path = args.results_file or results.path_for(args.checklist)
+    rerun_ids = None
+    if args.rerun_failed:
+        prev = results.load(results_path)
+        if prev is None:
+            print(f"{RED}--rerun-failed: no previous result at {results_path} — run the checklist once first{RESET}")
+            return 2
+        rerun_ids = set(results.failed_ids(prev))
 
     print(f"checklist: {args.checklist}")
     print(f"base_url:  {base_url}")
-    print(f"db:        {db_name}")
+    print(f"db:        {sql.db_label(db_default)}")
     for name, spec in dbs.items():
         print(f"db[{name}]: {sql.db_label(spec)}")
     print(f"corr-id:   {vs.get('TEST_CORRELATION_ID')}")
@@ -204,62 +280,81 @@ def main(argv=None):
         print(f"filter:    tag={args.tag}")
     if args.test_id:
         print(f"filter:    id={args.test_id}")
+    if rerun_ids is not None:
+        print(f"filter:    rerun-failed ({len(rerun_ids)} failed last run)")
     print()
 
-    # Resolve tokens up front (fail fast on auth issues). Skip on dry-run —
-    # resolution makes external calls (kc-ropc/OAuth) and dry-run must be inert.
-    if not args.dry_run:
-        for name, td in (doc.get("tokens", {}) or {}).items():
-            try:
-                ctx["tokens"][name] = auth.resolve_token(td, args.scripts_dir, vs)
-            except Exception as e:
-                print(f"{RED}token '{name}' resolution failed: {e}{RESET}")
+    def selected(test):
+        tags = test.get("tags", []) or []
+        if args.tag and args.tag not in tags:
+            return False
+        if args.test_id and args.test_id != test.get("id"):
+            return False
+        if rerun_ids is not None and test.get("id") not in rerun_ids:
+            return False
+        return True
+
+    suites = doc.get("suites", []) or []
+    plan = [(su, [t for t in (su.get("tests") or []) if selected(t)]) for su in suites]
+    if rerun_ids is not None and not rerun_ids:
+        print(f"{GREEN}nothing to rerun — the last run had no failed test{RESET}")
+        return 0
+
+    if not args.no_preflight:
+        used_tokens = sorted({n for _, ts in plan for t in ts for n in auth.tokens_used_by(t)})
+        miss = preflight.missing(doc, [(su, ts) for su, ts in plan if ts], used_tokens, vs)
+        if miss:
+            print(f"{RED}preflight: {len(miss)} variable(s) the selected tests need are not set:{RESET}")
+            for name, where in miss:
+                print(f"  - {name}  (first used at {where})")
+            print(f"{YELLOW}export them, put them in {os.path.join(os.path.dirname(results_path), 'env.sh')} "
+                  f"(sourced automatically), declare them under config.vars, or rerun with --no-preflight.{RESET}")
+            if not args.dry_run:  # a dry run only prints the plan: warn, do not stop
                 return 2
+            print()
 
-    total = passed = failed = skipped = 0
-    results = []  # per-test outcome for --json: {"id", "ok", "reason"}
-    not_verified = []  # [{"id", "reason"}] — selected by the tag filter but with
-                       # nothing to execute. Kept out of `passed` so that a run of
-                       # nothing but placeholders cannot report a green result.
+    total = skipped = 0
+    entries = {}            # id -> result entry (see results.py)
     teardown_warnings = []  # [{"id", "warning"}] — a failed teardown step never fails the
-                             # test itself (by design: recovery ran AFTER the result was
-                             # already recorded), but it must not vanish either — it's
-                             # surfaced separately so it can't be mistaken for the next
-                             # test's own unrelated failure.
+                            # test itself (by design: recovery ran AFTER the result was
+                            # already recorded), but it must not vanish either — it's
+                            # surfaced separately so it can't be mistaken for the next
+                            # test's own unrelated failure.
 
-    for suite in doc.get("suites", []) or []:
+    def record(suite, test, status, reason=None):
+        e = {"id": test.get("id", "?"), "suite": suite.get("id"), "suiteName": suite.get("name"),
+             "status": status, "evidence": test.get("evidence"), "at": results.now()}
+        if reason:
+            e["reason"] = reason
+        entries[e["id"]] = e
+        return e
+
+    for suite, tests in plan:
+        skipped += len(suite.get("tests") or []) - len(tests)
+        if not tests:
+            continue  # nothing selected: do not run this suite's setup at all
         print(f"{BOLD}── suite: {suite.get('id', '?')} ──{RESET}")
+        auth.begin_scope(ctx, "suite", suite.get("id"))
 
         if not args.dry_run:
             err = setup.run_steps(suite.get("setup", []), ctx)
             if err:
                 print(f"  {RED}suite setup failed: {err}{RESET}")
-                return 2
+                for test in tests:
+                    total += 1
+                    record(suite, test, "failed", f"suite setup failed: {err}")
+                continue
 
-        for test in suite.get("tests", []) or []:
+        for test in tests:
             tid = test.get("id", "?")
-            tags = test.get("tags", []) or []
-            if args.tag and args.tag not in tags:
-                skipped += 1
-                continue
-            if args.test_id and args.test_id != tid:
-                skipped += 1
-                continue
-
             total += 1
             vs.new_test_start()
+            auth.begin_scope(ctx, "test", f"{suite.get('id')}/{tid}/{vs.get('TEST_START')}")
 
             nv_reason = _unexecutable_reason(test)
             if nv_reason:
                 print(f"  {tid}  {YELLOW}— NOT VERIFIED{RESET}: {nv_reason}")
-                not_verified.append({"id": tid, "reason": nv_reason})
-                continue
-
-            err = setup.run_steps(test.get("setup", []), ctx, dry_run=args.dry_run)
-            if err:
-                print(f"  {RED}✗ {tid}: setup failed: {err}{RESET}")
-                failed += 1
-                results.append({"id": tid, "ok": False, "reason": f"setup failed: {err}"})
+                record(suite, test, "not_verified", nv_reason)
                 continue
 
             req = test.get("request") or {}
@@ -279,6 +374,35 @@ def main(argv=None):
                 print("    → DRY_RUN (request/SQL skipped)")
                 continue
 
+            try:
+                ctx["test_timeout"] = proc.parse_duration(test.get("timeout"))
+            except ValueError as e:
+                print(f"    {RED}✗ FAIL{RESET}\n      timeout: {e}")
+                record(suite, test, "failed", f"timeout: {e}")
+                continue
+            evidence = []
+            ctx["evidence"] = evidence
+
+            # Mint the network tokens this test uses before its setup runs, so a
+            # `scope: test` token's captured vars (e.g. the new account id) are
+            # available to every step of the test, not only after first use.
+            terr = None
+            for name in auth.tokens_used_by(test):
+                if str(name).strip().lower() in _NO_TOKEN and name not in ctx["tokens"]:
+                    continue
+                try:
+                    auth.header_for(name, ctx)
+                except Exception as e:
+                    terr = str(e)
+                    break
+            err = terr or setup.run_steps(test.get("setup", []), ctx)
+            if err:
+                print(f"  {RED}✗ {tid}: setup failed: {err}{RESET}")
+                record(suite, test, "failed", f"setup failed: {err}")
+                ctx["evidence"] = None
+                _teardown(test, ctx, tid, teardown_warnings)
+                continue
+
             kind, a, b, c = (("none", None, None, None) if not req
                              else _send_request(req, ctx))
             errs, msgs = [], []
@@ -286,8 +410,7 @@ def main(argv=None):
             if kind == "none":
                 # Nothing was sent; only an async settle can still be asserted here.
                 if exp.get("poll"):
-                    ok, detail = sql.poll(exp["poll"], db_name, args.scripts_dir, vs, dbs)
-                    (msgs if ok else errs).append(f"      poll: {detail}" if ok else f"poll: {detail}")
+                    _poll(exp["poll"], ctx, errs, msgs, evidence)
             elif kind == "error":
                 errs.append(b)
             elif kind == "kafka":
@@ -295,41 +418,46 @@ def main(argv=None):
                     errs.append(f"kafka produce: {b}")
                 else:
                     msgs.append(f"      {b}")
-                    poll_def = exp.get("poll")
-                    if poll_def:
-                        ok, detail = sql.poll(poll_def, db_name, args.scripts_dir, vs, dbs)
-                        (msgs if ok else errs).append(f"      poll: {detail}" if ok else f"poll: {detail}")
+                    if exp.get("poll"):
+                        _poll(exp["poll"], ctx, errs, msgs, evidence)
             else:  # http
                 status, body, raw = a, b, c
                 if exp.get("poll"):
-                    ok, detail = sql.poll(exp["poll"], db_name, args.scripts_dir, vs, dbs)
-                    (msgs if ok else errs).append(f"      poll: {detail}" if ok else f"poll: {detail}")
+                    _poll(exp["poll"], ctx, errs, msgs, evidence)
                 a_errs = assertions.assert_expect(exp, status, body, raw, vs)
                 if a_errs and body is None and (exp.get("json_path") or exp.get("body")):
                     a_errs.append(f"raw body: {(raw or '')[:200]}")
                 errs.extend(a_errs)
+                if set(exp) & (_ASSERTING_EXPECT_KEYS - {"poll"}):
+                    evidence.append("response")
 
             verify_block = test.get("verify") or []
             if verify_block:
-                _run_verify(verify_block, ctx, errs, msgs)
+                _run_verify(verify_block, ctx, errs, msgs, evidence)
+            ctx["evidence"] = None
 
             if errs:
                 print(f"    {RED}✗ FAIL{RESET}")
                 for e in errs:
                     print(f"      {e}")
-                failed += 1
-                results.append({"id": tid, "ok": False, "reason": "; ".join(str(e) for e in errs) or "FAIL"})
+                record(suite, test, "failed", "; ".join(str(e) for e in errs) or "FAIL")
+            elif not evidence:
+                # Ran, raised nothing — and asserted nothing either: every check was
+                # skipped (kafka tooling absent), descriptive, or inert. PASS here is
+                # how a feature reaches `passed` with no evidence behind it.
+                why = "ran, but no check asserted anything (every check skipped or descriptive)"
+                print(f"    {YELLOW}— NOT VERIFIED{RESET}: {why}")
+                for m in msgs:
+                    print(m)
+                record(suite, test, "not_verified", why)
             else:
                 tail = f"  status={a}" if kind == "http" else ""
                 print(f"    {GREEN}✓ PASS{RESET}{tail}")
                 for m in msgs:
                     print(m)
-                passed += 1
-                results.append({"id": tid, "ok": True})
+                record(suite, test, "passed")
 
-            tw = setup.run_steps(test.get("teardown", []), ctx, warn_only=True)
-            for w in tw or []:
-                teardown_warnings.append({"id": tid, "warning": w})
+            _teardown(test, ctx, tid, teardown_warnings)
 
     # Global cleanup (after all suites). `cleanup.db_ref` targets one alternate
     # database; a multi-service run that seeds rows in both needs a `teardown:` step
@@ -339,31 +467,61 @@ def main(argv=None):
     if cleanup_all and not args.dry_run:
         try:
             sql.run_sql(vs.expand(cleanup_all),
-                        sql.resolve_db(cleanup_cfg, db_name, dbs), args.scripts_dir)
+                        sql.resolve_db(cleanup_cfg, db_default, dbs), args.scripts_dir)
             print(f"\n{BOLD}cleanup:{RESET} ran global cleanup")
         except Exception as e:
             print(f"\n{YELLOW}cleanup warning: {e}{RESET}")
 
+    run_tests = list(entries.values())
+    passed = [e for e in run_tests if e["status"] == "passed"]
+    failed = [e for e in run_tests if e["status"] == "failed"]
+    not_verified = [e for e in run_tests if e["status"] == "not_verified"]
+
     print(f"\n{BOLD}── summary ──{RESET}")
     print(f"  total:   {total}")
-    print(f"  {GREEN}passed:  {passed}{RESET}")
-    print(f"  {RED}failed:  {failed}{RESET}")
+    print(f"  {GREEN}passed:  {len(passed)}{RESET}")
+    print(f"  {RED}failed:  {len(failed)}{RESET}")
     print(f"  skipped: {skipped}")
     if not_verified:
-        print(f"  {YELLOW}not verified: {len(not_verified)}{RESET} (nothing to execute — NOT counted as passed; record evidence by hand)")
+        print(f"  {YELLOW}not verified: {len(not_verified)}{RESET} (nothing asserted — NOT counted as passed; record evidence by hand)")
         for nv in not_verified:
             print(f"    {YELLOW}- {nv['id']}: {nv['reason']}{RESET}")
+    if failed:
+        print(f"  {RED}failed tests:{RESET} {' '.join(e['id'] for e in failed)}  (rerun only these: --rerun-failed)")
     if teardown_warnings:
         print(f"  {YELLOW}teardown warnings: {len(teardown_warnings)}{RESET} (recovery/cleanup step failed after the test's own result was recorded — state may be dirty for later tests)")
         for tw in teardown_warnings:
             print(f"    {YELLOW}- {tw['id']}: {tw['warning']}{RESET}")
+
+    if not args.dry_run and entries:
+        filtered = bool(args.tag or args.test_id or rerun_ids is not None)
+        order = [t.get("id") for su in suites for t in (su.get("tests") or [])]
+        prev = results.load(results_path) if filtered else None
+        merged = results.merge(prev, entries, order, filtered)
+        try:
+            results.write(results_path, results.payload(merged, teardown_warnings))
+            print(f"  results: {results_path}" + (" (merged with the previous run)" if filtered else ""))
+        except OSError as e:
+            print(f"  {YELLOW}results not saved ({e}) — --rerun-failed will not see this run{RESET}")
+
     if args.json:
         # Final machine-readable line for `flow-tools verify-collect`. The human
         # summary above stays for the console; verify-collect reads this last line.
-        print(json.dumps({
-            "passed": [r["id"] for r in results if r["ok"]],
-            "failed": [{"id": r["id"], "reason": r.get("reason", "FAIL")} for r in results if not r["ok"]],
-            "notVerified": not_verified,
-            "teardownWarnings": teardown_warnings,
-        }))
-    return 0 if failed == 0 else 1
+        # It covers THIS run only; run/last-result.json holds the merged view.
+        print(json.dumps(results.payload(run_tests, teardown_warnings), ensure_ascii=False))
+    return 0 if not failed else 1
+
+
+def _poll(poll_def, ctx, errs, msgs, evidence):
+    ok, detail = sql.poll(poll_def, ctx["db"], ctx["scripts_dir"], ctx["varstore"], ctx.get("dbs"))
+    if ok:
+        msgs.append(f"      poll: {detail}")
+        evidence.append("poll")
+    else:
+        errs.append(f"poll: {detail}")
+
+
+def _teardown(test, ctx, tid, sink):
+    tw = setup.run_steps(test.get("teardown", []), ctx, warn_only=True)
+    for w in tw or []:
+        sink.append({"id": tid, "warning": w})

@@ -13,7 +13,7 @@
  *           trace-repos, trace-link, srs-diff, state-update, worktree-info, verify-collect, verify-code, wave-plan, sd-slice,
  *           review-scope, review-collect, review-accept, code-rules-list,
  *           task-baseline, taskmaster-model-plan, taskmaster-model-check,
- *           epic-new, epic-attach, epic-list, epic-show, bug-new, bug-list, branch-ensure,
+ *           epic-new, epic-attach, epic-list, epic-show, epic-close, bug-new, bug-list, branch-ensure,
  *           backlog-new, backlog-list, backlog-set,
  *           learn, doctor, status-report
  */
@@ -63,6 +63,77 @@ const sdSlice = require('../lib/sd-slice.cjs');
  * way out — which is a person putting their name on the evidence, not a default.
  */
 const VERIFIED_STATUS_RE = /^[ \t]*status:[ \t]*(?:passed|verified-adhoc)\b/im;
+
+// --- epic record helpers (epic-show, epic-close) -------------------------------
+// EPIC.md header fields are `key: value` lines; the first match wins, which is the
+// header block (it precedes every `##` section).
+function epicField(content, key) {
+  const m = content.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
+  return m ? m[1].trim() : null;
+}
+// Bare `- slug` bullets under `## Sub-features` (legacy `- **name**` rows skipped).
+// The section ends at the next heading or at end of file.
+function epicSubSlugs(content) {
+  const m = content.match(/^## Sub-features[ \t]*$([\s\S]*?)(?=^#|(?![\s\S]))/m);
+  if (!m) return [];
+  const slugs = [];
+  for (const line of m[1].split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('- ')) continue;
+    const rest = trimmed.slice(2).trim();
+    if (rest.length > 0 && !rest.startsWith('**')) slugs.push(rest);
+  }
+  return slugs;
+}
+// Body lines of the first heading matching `headingRe`, up to the next heading of the
+// same or a higher level. Returns null when the heading is absent.
+function mdSectionLines(text, headingRe) {
+  const lines = text.split(/\r?\n/);
+  const start = lines.findIndex(l => headingRe.test(l));
+  if (start < 0) return null;
+  const level = (lines[start].match(/^(#+)/) || ['', '#'])[1].length;
+  const body = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    const h = lines[i].match(/^(#+)\s/);
+    if (h && h[1].length <= level) break;
+    body.push(lines[i]);
+  }
+  return body;
+}
+// Per-phase counts for epic-close, from MACHINE-WRITTEN sources only, in order:
+//   1. the `## Summary` Total row verify-collect writes (from the runner's tests[]);
+//   2. the bullets of a verify-collect file (`> Recorded by \`verify-collect\``):
+//      `- X: verified` truths, `## Failures`, `## Not verified ...`;
+//   3. the runner's merged result next to the checklist (specs/<f>/run/last-result.json).
+// A hand-written VERIFICATION.md (tables, prose) is never bullet-counted: its bullets
+// list a few notable cases, not the run, and summing them printed "0 verified" for a
+// phase that passed 146 tests. No machine source -> counts are null ("—"), not 0.
+function verificationCounts(text, runResultPath) {
+  const bullets = (body) => (body || []).filter(l => /^\s*[-*]\s+\S/.test(l));
+  const summary = mdSectionLines(text, /^##\s+Summary\s*$/);
+  const totalRow = (summary || []).find(l => /^\|\s*\*\*Total\*\*\s*\|/.test(l));
+  if (totalRow) {
+    const c = totalRow.split('|').map(x => x.trim()).filter(Boolean).slice(1, 4).map(Number);
+    if (c.length === 3 && c.every(Number.isFinite)) {
+      return { verified: c[0], failed: c[1], notVerified: c[2], countsFrom: 'summary' };
+    }
+  }
+  if (/^> Recorded by `verify-collect`/m.test(text)) {
+    const truths = bullets(mdSectionLines(text, /^#{1,6}\s*truths\b/i)).filter(l => /:\s*verified\b/i.test(l));
+    return {
+      verified: truths.length,
+      failed: bullets(mdSectionLines(text, /^#{1,6}\s*failures\b/i)).length,
+      notVerified: bullets(mdSectionLines(text, /^#{1,6}\s*not[- ]verified\b/i)).length,
+      countsFrom: 'verify-collect',
+    };
+  }
+  const run = runResultPath ? readJsonSafe(runResultPath, null) : null;
+  if (run && Array.isArray(run.tests)) {
+    const n = (st) => run.tests.filter(t => t && t.status === st).length;
+    return { verified: n('passed'), failed: n('failed'), notVerified: n('not_verified'), countsFrom: 'run-result' };
+  }
+  return { verified: null, failed: null, notVerified: null, countsFrom: null };
+}
 
 // Linked worktrees for cwd and every config.repos root, de-duplicated by path. A repo
 // root that is a main checkout contributes nothing. Best-effort: a git failure on one
@@ -1460,7 +1531,9 @@ const commands = {
     // Directory format: bare "- slug" lines under ## Sub-features (NOT "- **")
     // Legacy format: "- **name**" lines OR bare "- slug" lines
     const parseSubSlugs = (content, isLegacy) => {
-      const subSectionMatch = content.match(/^## Sub-features\s*$([\s\S]*?)(?=^##|\Z)/m);
+      // `\Z` is not an end-of-input anchor in JS (it matches a literal Z), so a
+      // Sub-features section LAST in the file listed nothing. `(?![\s\S])` is.
+      const subSectionMatch = content.match(/^## Sub-features\s*$([\s\S]*?)(?=^##|(?![\s\S]))/m);
       if (!subSectionMatch) return [];
       const subSection = subSectionMatch[1];
       const slugs = [];
@@ -1568,30 +1641,9 @@ const commands = {
     let content = '';
     try { content = fs.readFileSync(epicMdPath, 'utf8'); } catch { content = ''; }
 
-    // Parse key: value fields
-    const parseField = (c, key) => {
-      const m = c.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
-      return m ? m[1].trim() : null;
-    };
-
-    // Parse sub-feature slugs from ## Sub-features section (bare "- slug" lines)
-    const parseSubSlugs = (c) => {
-      const subSectionMatch = c.match(/^## Sub-features\s*$([\s\S]*?)(?=^##|\Z)/m);
-      if (!subSectionMatch) return [];
-      const subSection = subSectionMatch[1];
-      const slugs = [];
-      for (const line of subSection.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('- ')) continue;
-        const rest = trimmed.slice(2).trim();
-        if (rest.length > 0 && !rest.startsWith('**')) {
-          slugs.push(rest);
-        }
-      }
-      return slugs;
-    };
-
-    const subSlugs = parseSubSlugs(content);
+    // Parse key: value fields and the ## Sub-features list (shared with epic-close)
+    const parseField = epicField;
+    const subSlugs = epicSubSlugs(content);
     const subCount = subSlugs.length;
 
     // Load tasks.json once for progress lookups (FR-036: graceful if missing)
@@ -1661,6 +1713,141 @@ const commands = {
       legacy: false,
       subs,
       files,
+    });
+  },
+
+  // -----------------------------------------------------------------------
+  // epic-close  --epic <slug>  [--dry-run]
+  //
+  // Close an epic once every sub-feature (phase) is verified. Each sub-feature's
+  // specs/<feature>/VERIFICATION.md must exist and carry a status the ship gate
+  // accepts (VERIFIED_STATUS_RE: passed | verified-adhoc). ALL blockers are
+  // collected and reported together; with any blocker nothing is written.
+  //
+  // On success EPIC.md gets a `## Close-out` section (replaced on re-run, never
+  // duplicated) with a per-phase table of the VERIFICATION counts, and its header
+  // becomes `status: closed` + `closed: <ISO>`. Re-running on a closed epic is
+  // allowed and refreshes both. --dry-run computes the same result, writes nothing.
+  // Returns ok({ epic, status:'closed', phases, totals, dryRun, alreadyClosed, path }).
+  // -----------------------------------------------------------------------
+  'epic-close'(args) {
+    const slug = args.epic;
+    if (!slug || slug === true) return err('MISSING_ARG: --epic <slug>');
+    const dryRun = args['dry-run'] === true || args['dry-run'] === 'true';
+
+    const epicsDir = path.join(STATE_DIR, 'epics');
+    const epicDir = path.join(epicsDir, slug);
+    const epicMdPath = path.join(epicDir, 'EPIC.md');
+    if (!fs.existsSync(epicDir) || !fs.statSync(epicDir).isDirectory()) {
+      if (fs.existsSync(path.join(epicsDir, `${slug}.md`))) {
+        return err(`EPIC_LEGACY: epic '${slug}' is a legacy single-file epic. Convert it to a directory first: mkdir epics/${slug}/ && mv epics/${slug}.md epics/${slug}/EPIC.md`);
+      }
+      return err(`EPIC_NOT_FOUND: no epic '${slug}' in .spec-flow/epics/`);
+    }
+    let content;
+    try { content = fs.readFileSync(epicMdPath, 'utf8'); }
+    catch { return err(`EPIC_NOT_FOUND: epic '${slug}' has no EPIC.md at ${epicMdPath}`); }
+
+    const subSlugs = epicSubSlugs(content);
+    if (subSlugs.length === 0) {
+      return err(`EPIC_NO_SUBFEATURES: epic '${slug}' lists no sub-features under "## Sub-features" in EPIC.md — nothing to close. Attach phases with epic-attach first.`);
+    }
+
+    const blockers = [];
+    const phases = subSlugs.map((feature) => {
+      const verification = path.join(PATHS.specs, feature, 'VERIFICATION.md');
+      let text = null;
+      try { text = fs.readFileSync(verification, 'utf8'); } catch {}
+      if (text === null) {
+        blockers.push({ feature, reason: 'VERIFICATION.md missing', verification });
+        return null;
+      }
+      const statusMatch = text.match(/^[ \t]*status:[ \t]*(\S+)/im);
+      const status = statusMatch ? statusMatch[1] : null;
+      if (!VERIFIED_STATUS_RE.test(text)) {
+        blockers.push({ feature, reason: `VERIFICATION status is ${status ? `'${status}'` : 'missing'} (the ship gate accepts passed or verified-adhoc)`, status, verification });
+        return null;
+      }
+      const runResult = path.join(PATHS.specs, feature, 'run', 'last-result.json');
+      return { feature, status, ...verificationCounts(text, runResult), verification };
+    });
+
+    if (blockers.length) {
+      const list = blockers.map(b => `${b.feature}: ${b.reason}`).join('; ');
+      return Object.assign(
+        err(`EPIC_NOT_CLOSABLE: ${blockers.length} of ${subSlugs.length} phase(s) of epic '${slug}' are not verified — ${list}. Nothing was written.`),
+        { data: { epic: slug, blockers, dryRun } });
+    }
+
+    // Totals add up the phases whose counts are machine-readable; the others are
+    // named (uncounted) instead of silently contributing zeros.
+    const counted = phases.filter(p => p.countsFrom);
+    const uncounted = phases.filter(p => !p.countsFrom).map(p => p.feature);
+    const totals = counted.reduce((t, p) => ({
+      verified: t.verified + p.verified, failed: t.failed + p.failed, notVerified: t.notVerified + p.notVerified,
+    }), { verified: 0, failed: 0, notVerified: 0 });
+    totals.uncounted = uncounted;
+    const num = (v) => (v === null || v === undefined ? '—' : v);
+    const alreadyClosed = /^closed$/i.test(epicField(content, 'status') || '');
+    const closedAt = new Date().toISOString();
+
+    const section = [
+      '## Close-out',
+      '',
+      `Closed by \`epic-close\` on ${closedAt}. Counts come from each phase's verify-collect summary, its verify-collect record, or the runner's run/last-result.json.`,
+      '',
+      '| Phase | VERIFICATION status | Verified | Failed | Not verified | Counts from |',
+      '| --- | --- | ---: | ---: | ---: | --- |',
+      ...phases.map(p => `| ${mdCell(p.feature)} | ${mdCell(p.status)} | ${num(p.verified)} | ${num(p.failed)} | ${num(p.notVerified)} | ${p.countsFrom || '—'} |`),
+      `| **Total** | ${phases.length} phase(s) | ${totals.verified} | ${totals.failed} | ${totals.notVerified} | ${counted.length} of ${phases.length} counted |`,
+      ...(uncounted.length ? ['',
+        `Not counted (hand-written VERIFICATION.md, no run/last-result.json): ${uncounted.join(', ')}. `
+        + 'Re-record them with `verify-collect --results specs/<feature>/run/last-result.json` to include their numbers.'] : []),
+    ];
+
+    // Header block = everything before the first `## ` section.
+    const lines = content.split('\n');
+    let headerEnd = lines.findIndex(l => /^##\s/.test(l));
+    if (headerEnd < 0) headerEnd = lines.length;
+    const header = lines.slice(0, headerEnd);
+    let rest = lines.slice(headerEnd);
+    const statusIdx = header.findIndex(l => /^status:/.test(l));
+    if (statusIdx >= 0) header[statusIdx] = 'status: closed';
+    const closedIdx = header.findIndex(l => /^closed:/.test(l));
+    if (closedIdx >= 0) header[closedIdx] = `closed: ${closedAt}`;
+    else {
+      let at = statusIdx >= 0 ? statusIdx + 1 : header.length;
+      if (statusIdx < 0) {
+        while (at > 0 && header[at - 1].trim() === '') at--;
+        header.splice(at++, 0, 'status: closed');
+      }
+      header.splice(at, 0, `closed: ${closedAt}`);
+    }
+
+    // Drop any previous `## Close-out` section (up to the next `## ` heading or EOF),
+    // then append the fresh one at the end.
+    const coStart = rest.findIndex(l => /^## Close-out\s*$/.test(l));
+    if (coStart >= 0) {
+      let coEnd = rest.findIndex((l, i) => i > coStart && /^##\s/.test(l));
+      if (coEnd < 0) coEnd = rest.length;
+      rest = [...rest.slice(0, coStart), ...rest.slice(coEnd)];
+    }
+    while (rest.length && rest[rest.length - 1].trim() === '') rest.pop();
+    const updated = [...header, ...rest, '', ...section, ''].join('\n');
+
+    if (!dryRun) {
+      try { fs.writeFileSync(epicMdPath, updated); } catch (e) { return err(`WRITE_FAILED: ${e.message}`); }
+    }
+    return ok({
+      epic: slug,
+      status: 'closed',
+      closedAt,
+      phases,
+      totals,
+      dryRun,
+      alreadyClosed,
+      path: epicMdPath,
+      ...(alreadyClosed ? { note: `epic '${slug}' was already closed; the Close-out section and closed: date were ${dryRun ? 'recomputed (dry run, not written)' : 'refreshed'}.` } : {}),
     });
   },
 

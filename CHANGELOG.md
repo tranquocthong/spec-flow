@@ -2,6 +2,33 @@
 
 All notable changes to spec-flow. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions are git tags on `main`.
 
+## [0.20.0] — 2026-11-18
+
+Found while closing a 5-phase epic (337 test cases): the runner counted a check that never ran as a PASS, a hung step held the run for 40 minutes, every row registered its own account by hand, and the results were copied into VERIFICATION.md and EPIC.md by hand.
+
+### Fixed
+
+- **A check the runner did not understand let the row PASS.** `exec:` inside `verify:` fell through to the Kafka dispatcher, came back "skipped" and the row went green without its check running; an unknown setup step (`sleep:`) was likewise a no-op, and a setup `kafka:` step was counted as an assertion but never produced. Unknown step and verify kinds are now an error at run time and a lint error before it; `exec:` is a real verify item (exit 0 required, optional `expect:` on stdout); setup `kafka:` produces.
+- **PASS now needs evidence at run time.** A test that raised no error but asserted nothing (every check skipped, descriptive, or inert) is NOT VERIFIED, not PASS. Rows with nothing to run were already NOT VERIFIED since 0.11.0.
+- **`config.db` host, port, user and password were ignored.** Only `database:` was read, so a checklist that declared `port: 7110` and `username:` still used whatever `db-creds.sh` discovered, and the user had to export `DB_USER` by hand. They are honored now (`username` is an alias of `user`); `config.databases` entries inherit them. A checklist with only `database:` behaves as before.
+- **One unused token with an empty env var aborted the whole run.** Tokens are resolved lazily, when a test uses them; a failed token fails only the tests that use it.
+- **A setup `http:` step with an unknown `token:` was sent without auth.** It is an error now, as for a request.
+- **A failed `suite setup` aborted the run.** Its tests are recorded as FAIL and the next suite runs.
+- **`epic-list` showed no sub-features when `## Sub-features` was the last section of EPIC.md** (`\Z` is not an end-of-input anchor in JavaScript). `epic-show` had the same bug.
+- **VERIFICATION.md said "status is `incomplete`" under `status: failed`** when a run had both failures and unexecuted tests.
+- **A test of the models shim rewrote the repo's own `.taskmaster/config.json`.** It now runs in a temp directory.
+
+### Added
+
+- **Step timeouts.** Every `exec` (setup, teardown, verify) and SQL statement is killed with its child processes after 5 minutes, and the test FAILS as `step hung`. Override with `timeout:` on the step or the test, `config.step_timeout`, or env `CHECKLIST_STEP_TIMEOUT`.
+- **`retry:` / `retry_on:` on exec steps**, e.g. `retry: 1, retry_on: "context deadline exceeded"` for a migration lock lost to a parallel run. A non-matching failure and a hang are never retried.
+- **Login tokens.** `tokens: <name>: {http: {...}, token_path, capture, scope}` calls the app's own login/register endpoint and sends the token as Bearer; `scope: test` mints a fresh account per test, with `capture:` vars available to every step of that test.
+- **`--rerun-failed`.** Every run keeps a merged result in `<checklist dir>/run/last-result.json`; `--rerun-failed` runs only the tests that failed there and merges back, so the file still covers the whole checklist and can be passed to `verify-collect`.
+- **`run/env.sh` and a preflight.** The runner sources `<checklist dir>/run/env.sh` when it exists (`run/` is git-ignored automatically), then lists every `${VAR}` the selected tests need that nothing sets and stops before running anything (`--no-preflight` skips it).
+- **Configurable psql.** `manualTest.psql` in `.spec-flow/config.json`: a command prefix, or `{"container": "<name>"}` to run psql inside Docker (`PGOPTIONS` forwarded). A missing psql now says how to configure it, and psql's own error message reaches the test result instead of being discarded.
+- **Summary tables in VERIFICATION.md.** `verify-collect` writes PASS / FAIL / NOT VERIFIED counts per suite and per `evidence:` label from the runner's new `tests[]` rows. Rows can carry a free-form `evidence:` label (`live`, `automated`, `none`, ...).
+- **`flow-tools epic-close --epic <id> [--dry-run]`.** Checks that every phase's VERIFICATION.md passes the ship gate (all blockers listed at once, nothing written on failure), writes a `## Close-out` table to EPIC.md and sets `status: closed`. Re-running refreshes the section. Counts come only from machine-written sources (the verify-collect summary or record, else the runner's `run/last-result.json`); a phase whose VERIFICATION.md was written by hand is listed as not counted rather than summed as zeros.
+
 ## [0.19.1] — 2026-11-17
 
 ### Fixed

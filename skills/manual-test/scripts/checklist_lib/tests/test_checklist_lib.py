@@ -823,5 +823,302 @@ class TestUnexecutableTest(unittest.TestCase):
         self.assertIsNotNone(reason)
 
 
+
+# ---------------------------------------------------------------------------
+# Epic close-out findings: rows that PASSed without running anything,
+# hangs with no timeout, tokens only from env, no rerun of failures.
+# ---------------------------------------------------------------------------
+
+def _ctx(**kw):
+    ctx = {"db": "d", "dbs": {}, "scripts_dir": ".", "base_url": "http://x", "base_urls": {},
+           "varstore": VarStore(), "tokens": {}, "doc": {}}
+    ctx.update(kw)
+    return ctx
+
+
+def _run_main(doc_text, *extra):
+    """Run runner.main() on a checklist string; returns (rc, stdout, results_path)."""
+    import contextlib
+    import io
+    import tempfile
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, "CHECKLIST.yaml")
+    with open(path, "w") as f:
+        f.write(doc_text)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = runner.main(["--checklist", path, "--scripts-dir", ".", *extra])
+    return rc, out.getvalue(), os.path.join(d, "run", "last-result.json")
+
+
+def _last_json(out):
+    import json
+    return json.loads([l for l in out.splitlines() if l.startswith("{")][-1])
+
+
+class TestUnknownGrammarIsAnError(unittest.TestCase):
+    def test_unknown_setup_step_fails_instead_of_no_op(self):
+        from checklist_lib import setup
+        err = setup.run_steps([{"sleep": 2}], _ctx())
+        self.assertIsNotNone(err)
+        self.assertIn("unknown keys (sleep)", err)
+
+    def test_unknown_verify_item_fails_the_row(self):
+        rc, out, _ = _run_main(
+            "suites:\n- id: s\n  tests:\n  - id: TC-1\n    verify:\n    - {curl: 'x'}\n", "--json")
+        res = _last_json(out)
+        self.assertEqual(rc, 1)
+        self.assertEqual(res["passed"], [])
+        self.assertIn("unknown keys (curl)", res["failed"][0]["reason"])
+
+
+class TestVerifyExec(unittest.TestCase):
+    """`exec:` inside `verify:` used to be dispatched to kafka.check, come back
+    "skipped", and leave the row PASS although the check never ran (TC-198)."""
+
+    def _verify(self, items):
+        errs, msgs, ev = [], [], []
+        runner._run_verify(items, _ctx(), errs, msgs, ev)
+        return errs, ev
+
+    def test_exit_zero_passes_with_evidence(self):
+        errs, ev = self._verify([{"exec": "true"}])
+        self.assertEqual(errs, [])
+        self.assertEqual(ev, ["verify exec"])
+
+    def test_non_zero_exit_fails(self):
+        errs, ev = self._verify([{"exec": "echo boom >&2; exit 3"}])
+        self.assertEqual(len(errs), 1)
+        self.assertIn("(3)", errs[0])
+        self.assertIn("boom", errs[0])
+        self.assertEqual(ev, [])
+
+    def test_expect_asserts_stdout(self):
+        self.assertEqual(self._verify([{"exec": "echo 5", "expect": ">= 3"}])[0], [])
+        errs, _ = self._verify([{"exec": "echo 2", "expect": ">= 3"}])
+        self.assertEqual(len(errs), 1)
+
+
+class TestRuntimeEvidence(unittest.TestCase):
+    """PASS needs at least one check that actually asserted at runtime."""
+
+    def test_only_skipped_checks_is_not_verified(self):
+        from checklist_lib import kafka
+        orig = kafka.check
+        kafka.check = lambda vb, vs: (None, "kafka_topic skipped: no kcat")
+        try:
+            rc, out, _ = _run_main(
+                "suites:\n- id: s\n  tests:\n  - id: TC-1\n    verify:\n"
+                "    - {kafka_topic: {topic: t}}\n", "--json")
+        finally:
+            kafka.check = orig
+        res = _last_json(out)
+        self.assertEqual(rc, 0)
+        self.assertEqual(res["passed"], [])
+        self.assertEqual([n["id"] for n in res["notVerified"]], ["TC-1"])
+
+    def test_row_with_no_steps_is_not_verified(self):
+        rc, out, _ = _run_main(
+            "suites:\n- id: s\n  tests:\n  - id: TC-1\n    tags: [live-e2e]\n    evidence: none\n", "--json")
+        res = _last_json(out)
+        self.assertEqual(res["passed"], [])
+        self.assertEqual(res["tests"][0]["status"], "not_verified")
+        self.assertEqual(res["tests"][0]["evidence"], "none")
+
+
+class TestStepTimeoutAndRetry(unittest.TestCase):
+    def test_parse_duration(self):
+        from checklist_lib.proc import parse_duration
+        self.assertEqual(parse_duration("5m"), 300)
+        self.assertEqual(parse_duration("90s"), 90)
+        self.assertEqual(parse_duration(2), 2)
+        self.assertIsNone(parse_duration(None))
+        for bad in ("soon", 0, -1, True):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                parse_duration(bad)
+
+    def test_hung_exec_is_killed_and_named_hung(self):
+        import time
+        from checklist_lib import setup
+        t0 = time.time()
+        err = setup.run_steps([{"exec": "sleep 30 | cat", "timeout": "0.5s"}], _ctx())
+        self.assertLess(time.time() - t0, 10, "the process group must be killed, not awaited")
+        self.assertIn("step hung", err)
+
+    def test_test_level_timeout_is_the_step_default(self):
+        from checklist_lib import setup
+        err = setup.run_steps([{"exec": "sleep 30"}], _ctx(test_timeout=0.3))
+        self.assertIn("step hung", err)
+
+    def test_retry_on_matching_output(self):
+        import tempfile
+        from checklist_lib import setup
+        cnt = os.path.join(tempfile.mkdtemp(), "n")
+        cmd = (f"c=$(cat {cnt} 2>/dev/null || echo 0); echo $((c+1)) > {cnt}; "
+               f"[ $c -ge 1 ] || {{ echo 'context deadline exceeded'; exit 1; }}")
+        err = setup.run_steps([{"exec": cmd, "retry": 1, "retry_on": "deadline exceeded"}], _ctx())
+        self.assertIsNone(err)
+
+    def test_retry_on_skips_a_real_failure(self):
+        import tempfile
+        from checklist_lib import setup
+        cnt = os.path.join(tempfile.mkdtemp(), "n")
+        cmd = f"echo x >> {cnt}; echo 'assertion failed'; exit 1"
+        err = setup.run_steps([{"exec": cmd, "retry": 3, "retry_on": "deadline exceeded"}], _ctx())
+        self.assertIsNotNone(err)
+        with open(cnt) as f:
+            self.assertEqual(len(f.read().split()), 1, "a non-matching failure must not be retried")
+
+
+class TestLazyTokens(unittest.TestCase):
+    def _fake_http(self):
+        from checklist_lib import http
+        calls = []
+
+        def fake(method, url, headers, body):
+            calls.append((url, dict(headers)))
+            if url.endswith("/login"):
+                n = sum(1 for c in calls if c[0].endswith("/login"))
+                return 200, {"t": f"tok-{n}", "acc": f"acc-{n}"}, ""
+            return 200, {}, ""
+        return http, fake, calls
+
+    def test_unused_broken_token_does_not_abort_the_run(self):
+        rc, out, _ = _run_main(
+            "tokens:\n  bad: {bearer: '${SURELY_UNSET_TOKEN_VAR}'}\n"
+            "suites:\n- id: s\n  tests:\n  - id: TC-1\n    verify:\n    - {exec: 'true'}\n", "--json")
+        self.assertEqual(rc, 0)
+        self.assertEqual(_last_json(out)["passed"], ["TC-1"])
+
+    def test_http_token_scope_test_mints_per_test_and_run_scope_caches(self):
+        from checklist_lib import auth
+        http, fake, calls = self._fake_http()
+        orig, http.do_request = http.do_request, fake
+        try:
+            ctx = _ctx(tokens={
+                "fresh": {"http": {"method": "POST", "path": "/login"}, "token_path": "$.t",
+                          "capture": {"ACC": "$.acc"}, "scope": "test"},
+                "shared": {"http": {"method": "POST", "path": "/login"}, "token_path": "$.t"}})
+            auth.begin_scope(ctx, "test", "a")
+            h1 = auth.header_for("fresh", ctx)
+            self.assertEqual(auth.header_for("fresh", ctx), h1, "cached within one test")
+            self.assertEqual(ctx["varstore"].get("ACC"), "acc-1")
+            s1 = auth.header_for("shared", ctx)
+            auth.begin_scope(ctx, "test", "b")
+            h2 = auth.header_for("fresh", ctx)
+            self.assertNotEqual(h1, h2, "scope: test mints a new token per test")
+            self.assertEqual(auth.header_for("shared", ctx), s1, "scope: run is minted once")
+        finally:
+            http.do_request = orig
+        self.assertEqual(h1, ("Authorization", "Bearer tok-1"))
+
+    def test_bearer_uses_a_var_captured_earlier(self):
+        from checklist_lib import auth
+        ctx = _ctx(tokens={"t": {"bearer": "${CAPTURED_TOK}"}})
+        ctx["varstore"].set("CAPTURED_TOK", "abc")
+        self.assertEqual(auth.header_for("t", ctx), ("Authorization", "Bearer abc"))
+
+    def test_setup_http_unknown_token_is_an_error_not_an_anonymous_call(self):
+        from checklist_lib import setup
+        err = setup.run_steps([{"http": {"method": "GET", "path": "/p", "token": "typo"}}], _ctx())
+        self.assertIn("unknown token 'typo'", err)
+
+
+class TestRerunFailed(unittest.TestCase):
+    DOC = ("suites:\n- id: s\n  tests:\n"
+           "  - id: TC-1\n    verify:\n    - {exec: 'true'}\n"
+           "  - id: TC-2\n    verify:\n    - {exec: 'test -n \"$FLIP\"'}\n")
+
+    def test_rerun_runs_only_failures_and_merges(self):
+        import json
+        import tempfile
+        d = tempfile.mkdtemp()
+        res = os.path.join(d, "last.json")
+        os.environ.pop("FLIP", None)
+        rc, _, _ = _run_main(self.DOC, "--results-file", res)
+        self.assertEqual(rc, 1)
+        os.environ["FLIP"] = "1"
+        try:
+            rc, out, _ = _run_main(self.DOC, "--results-file", res, "--rerun-failed")
+        finally:
+            del os.environ["FLIP"]
+        self.assertEqual(rc, 0)
+        self.assertNotIn("TC-1  ", out, "a passed test is not rerun")
+        with open(res) as f:
+            data = json.load(f)
+        self.assertEqual(sorted(data["passed"]), ["TC-1", "TC-2"], "merged view keeps TC-1")
+        self.assertEqual(data["failed"], [])
+
+    def test_rerun_without_previous_result_is_an_error(self):
+        import tempfile
+        rc, out, _ = _run_main(self.DOC, "--results-file",
+                               os.path.join(tempfile.mkdtemp(), "none.json"), "--rerun-failed")
+        self.assertEqual(rc, 2)
+        self.assertIn("no previous result", out)
+
+
+class TestPreflight(unittest.TestCase):
+    def test_missing_var_stops_the_run_and_names_it(self):
+        rc, out, _ = _run_main(
+            "suites:\n- id: s\n  tests:\n  - id: TC-1\n    verify:\n"
+            "    - {exec: 'test ${PREFLIGHT_SURELY_UNSET}'}\n")
+        self.assertEqual(rc, 2)
+        self.assertIn("PREFLIGHT_SURELY_UNSET", out)
+        self.assertIn("TC-1", out)
+
+    def test_defaults_captures_and_config_vars_are_not_missing(self):
+        from checklist_lib import preflight
+        doc = {"config": {"vars": {"A": "1"}, "base_url": "http://${HOST:-x}"},
+               "suites": [{"id": "s", "tests": [{"id": "T", "setup": [
+                   {"exec": "echo", "capture": {"B": "stdout"}}, {"vars": {"C": "${A}"}}],
+                   "request": {"path": "/${A}/${B}/${C}/${TEST_START}"}}]}]}
+        sel = [(doc["suites"][0], doc["suites"][0]["tests"])]
+        self.assertEqual(preflight.missing(doc, sel, [], VarStore()), [])
+
+
+class TestConfigDbIsHonored(unittest.TestCase):
+    """config.db host/port/username used to be ignored (only `database:` read)."""
+
+    def test_full_spec(self):
+        name, db = runner._db_config(
+            {"db": {"host": "localhost", "port": 7110, "database": "app", "username": "app_user"}}, VarStore())
+        self.assertEqual(name, "app")
+        self.assertEqual(db, {"database": "app", "host": "localhost", "port": "7110", "user": "app_user"})
+
+    def test_name_only_keeps_discovery(self):
+        self.assertEqual(runner._db_config({"db": {"database": "app"}}, VarStore()), ("app", "app"))
+
+    def test_alternate_database_inherits_the_default_server(self):
+        self.assertEqual(runner._inherit("other", {"database": "app", "port": "7110"}),
+                         {"port": "7110", "database": "other"})
+
+
+class TestLintRejectsUnknownGrammar(unittest.TestCase):
+    def _lint(self, text):
+        import subprocess
+        import tempfile
+        here = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+            f.write(text)
+        p = subprocess.run([os.path.join(here, "lint-checklist.sh"), f.name], capture_output=True, text=True)
+        os.unlink(f.name)
+        return p.returncode, p.stderr
+
+    def test_unknown_verify_and_step_kinds(self):
+        rc, err = self._lint("suites:\n- id: s\n  tests:\n  - id: T\n    tags: [no-verify]\n"
+                             "    setup:\n    - {sleep: 2}\n    verify:\n    - {curl: x}\n")
+        self.assertEqual(rc, 1)
+        self.assertIn("unknown keys (sleep)", err)
+        self.assertIn("unknown keys (curl)", err)
+
+    def test_bad_timeout_retry_and_http_token(self):
+        rc, err = self._lint("tokens:\n  t: {http: {path: /login}}\n"
+                             "suites:\n- id: s\n  tests:\n  - id: T\n    timeout: soon\n"
+                             "    verify:\n    - {exec: 'true', retry: -1}\n")
+        self.assertEqual(rc, 1)
+        self.assertIn("token_path", err)
+        self.assertIn("timeout", err)
+        self.assertIn("retry", err)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

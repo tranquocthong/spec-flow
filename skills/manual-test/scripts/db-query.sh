@@ -60,10 +60,40 @@ USER="${USER_OVERRIDE:-$PG_USER}"
 # rather than testing for emptiness.
 [ "$PASS_SET" -eq 1 ] && PASS="$PASS_OVERRIDE" || PASS="$PG_PASS"
 
+# Which psql. Default: `psql` on PATH. Configurable (run-checklist.sh exports these
+# from .spec-flow/config.json manualTest.psql) for machines without a local client:
+#   SF_PSQL="<command prefix>"   — e.g. a versioned binary or a wrapper script; gets
+#                                  the same arguments psql would.
+#   SF_PSQL_CONTAINER=<name>     — run psql INSIDE that Docker container. Host and port
+#                                  are dropped (inside the container the server is
+#                                  local); user, password, database, PGOPTIONS kept;
+#                                  a -f file is streamed over stdin.
+if [ -n "${SF_PSQL_CONTAINER:-}" ]; then
+  command -v docker >/dev/null 2>&1 || { echo "Error: SF_PSQL_CONTAINER=$SF_PSQL_CONTAINER but docker is not on PATH" >&2; exit 127; }
+  DOCKER_ENV=(-e "PGPASSWORD=$PASS")
+  [ -n "${PGOPTIONS:-}" ] && DOCKER_ENV+=(-e "PGOPTIONS=$PGOPTIONS")
+  if [ -n "$SQL_FILE" ]; then
+    docker exec -i "${DOCKER_ENV[@]}" "$SF_PSQL_CONTAINER" psql -U "$USER" -d "$DB" \
+      "${PSQL_FLAGS[@]+"${PSQL_FLAGS[@]}"}" -f - < "$SQL_FILE"
+  else
+    docker exec "${DOCKER_ENV[@]}" "$SF_PSQL_CONTAINER" psql -U "$USER" -d "$DB" \
+      "${PSQL_FLAGS[@]+"${PSQL_FLAGS[@]}"}" -c "$SQL" </dev/null
+  fi
+  exit $?
+fi
+
+# shellcheck disable=SC2206
+PSQL_CMD=(${SF_PSQL:-psql})
+if ! command -v "${PSQL_CMD[0]}" >/dev/null 2>&1; then
+  echo "Error: ${PSQL_CMD[0]} not found on PATH — install a psql client, or set manualTest.psql in" \
+       ".spec-flow/config.json: \"<psql command>\" or {\"container\": \"<postgres container>\"}" >&2
+  exit 127
+fi
+
 if [ -n "$SQL_FILE" ]; then
-  PGPASSWORD="$PASS" psql -h "$HOST" -p "$PORT" -U "$USER" -d "$DB" \
+  PGPASSWORD="$PASS" "${PSQL_CMD[@]}" -h "$HOST" -p "$PORT" -U "$USER" -d "$DB" \
     "${PSQL_FLAGS[@]+"${PSQL_FLAGS[@]}"}" -f "$SQL_FILE"
 else
-  PGPASSWORD="$PASS" psql -h "$HOST" -p "$PORT" -U "$USER" -d "$DB" \
+  PGPASSWORD="$PASS" "${PSQL_CMD[@]}" -h "$HOST" -p "$PORT" -U "$USER" -d "$DB" \
     "${PSQL_FLAGS[@]+"${PSQL_FLAGS[@]}"}" -c "$SQL"
 fi

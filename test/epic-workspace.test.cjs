@@ -809,3 +809,174 @@ test('TC-040: status-report with EPIC file adds epic field to return value', () 
   assert.equal(r.data.epic.id, 'srep-epic', 'epic.id should be srep-epic');
   assert.ok(r.data.epic.progress, 'should have progress object');
 });
+
+// ---------------------------------------------------------------------------
+// epic-close: refuse until every phase's VERIFICATION passes the ship gate,
+// then write a ## Close-out table and set status: closed.
+// ---------------------------------------------------------------------------
+
+/** Epic `pay` with sub-features pay-a, pay-b, pay-c. */
+function epicProject() {
+  const dir = tmpProject();
+  initProject(dir);
+  const r = run(['epic-new', '--name', 'pay', '--subs', 'a,b,c'], dir);
+  assert.equal(r.ok, true, 'epic-new should succeed');
+  return dir;
+}
+function writeVerification(dir, feature, status, { verified = [], failures = [], notVerified = [] } = {}) {
+  const d = path.join(dir, '.spec-flow', 'specs', feature);
+  fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(d, 'VERIFICATION.md'), [
+    `# VERIFICATION — ${feature}`, '',
+    `status: ${status}`, '',
+    "> Recorded by `verify-collect` from the checklist runner's result.", '',
+    '## must_haves', '',
+    '### truths', '',
+    ...verified.map(id => `- ${id}: verified`),
+    ...(failures.length ? ['', '## Failures', '', ...failures.map(id => `- ${id}: FAILED — x`)] : []),
+    ...(notVerified.length ? ['', '## Not verified (never executed — needs a hand-run)', '', ...notVerified.map(id => `- ${id}: NOT VERIFIED — x`)] : []),
+    '',
+  ].join('\n'));
+}
+const epicMd = (dir) => fs.readFileSync(path.join(dir, '.spec-flow', 'epics', 'pay', 'EPIC.md'), 'utf8');
+
+test('epic-close: closes a fully verified epic with a per-phase Close-out table', () => {
+  const dir = epicProject();
+  writeVerification(dir, 'pay-a', 'passed', { verified: ['TC-1', 'TC-2'] });
+  writeVerification(dir, 'pay-b', 'verified-adhoc', { verified: ['TC-1'], failures: ['TC-2'] });
+  writeVerification(dir, 'pay-c', 'verified-adhoc', { verified: ['TC-1'], notVerified: ['TC-8', 'TC-9'] });
+  const r = run(['epic-close', '--epic', 'pay'], dir);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.data.status, 'closed');
+  assert.equal(r.data.dryRun, false);
+  assert.equal(r.data.alreadyClosed, false);
+  assert.deepEqual(r.data.totals, { verified: 4, failed: 1, notVerified: 2, uncounted: [] });
+  assert.deepEqual(r.data.phases.map(p => [p.feature, p.status, p.verified, p.failed, p.notVerified]), [
+    ['pay-a', 'passed', 2, 0, 0],
+    ['pay-b', 'verified-adhoc', 1, 1, 0],
+    ['pay-c', 'verified-adhoc', 1, 0, 2],
+  ]);
+  const md = epicMd(dir);
+  assert.match(md, /^status: closed$/m);
+  assert.doesNotMatch(md, /^status: active$/m);
+  assert.match(md, new RegExp(`^closed: ${r.data.closedAt.replace(/\./g, '\\.')}$`, 'm'));
+  assert.ok(md.includes([
+    '| Phase | VERIFICATION status | Verified | Failed | Not verified | Counts from |',
+    '| --- | --- | ---: | ---: | ---: | --- |',
+    '| pay-a | passed | 2 | 0 | 0 | verify-collect |',
+    '| pay-b | verified-adhoc | 1 | 1 | 0 | verify-collect |',
+    '| pay-c | verified-adhoc | 1 | 0 | 2 | verify-collect |',
+    '| **Total** | 3 phase(s) | 4 | 1 | 2 | 3 of 3 counted |',
+  ].join('\n')), md);
+  assert.ok(md.includes(r.data.closedAt), 'the close-out names the ISO date');
+  // The epic still reads correctly through the sibling commands.
+  const show = run(['epic-show', '--epic', 'pay'], dir);
+  assert.equal(show.data.status, 'closed');
+  assert.equal(show.data.subCount, 3);
+});
+
+test('epic-close: lists every blocker together and writes nothing', () => {
+  const dir = epicProject();
+  writeVerification(dir, 'pay-a', 'passed', { verified: ['TC-1'] });
+  writeVerification(dir, 'pay-b', 'incomplete', { verified: ['TC-1'], notVerified: ['TC-2'] });
+  // pay-c has no VERIFICATION.md at all
+  const before = epicMd(dir);
+  const r = run(['epic-close', '--epic', 'pay'], dir);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /^EPIC_NOT_CLOSABLE:/);
+  assert.match(r.error, /pay-b: VERIFICATION status is 'incomplete'/);
+  assert.match(r.error, /pay-c: VERIFICATION\.md missing/);
+  assert.doesNotMatch(r.error, /pay-a/, 'a verified phase is not a blocker');
+  assert.deepEqual(r.data.blockers.map(b => b.feature), ['pay-b', 'pay-c']);
+  assert.equal(r.data.blockers[0].status, 'incomplete');
+  assert.equal(epicMd(dir), before, 'EPIC.md untouched');
+});
+
+test('epic-close: re-running replaces the Close-out section instead of duplicating it', () => {
+  const dir = epicProject();
+  for (const f of ['pay-a', 'pay-b', 'pay-c']) writeVerification(dir, f, 'passed', { verified: ['TC-1'] });
+  assert.equal(run(['epic-close', '--epic', 'pay'], dir).ok, true);
+  writeVerification(dir, 'pay-a', 'passed', { verified: ['TC-1', 'TC-2', 'TC-3'] });
+  const r = run(['epic-close', '--epic', 'pay'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.alreadyClosed, true);
+  assert.match(r.data.note, /already closed/);
+  const md = epicMd(dir);
+  assert.equal(md.match(/^## Close-out$/gm).length, 1, 'exactly one Close-out section');
+  assert.equal(md.match(/^closed: /gm).length, 1, 'exactly one closed: line');
+  assert.equal(md.match(/^status: /gm).length, 1, 'exactly one status: line');
+  assert.match(md, /^\| pay-a \| passed \| 3 \| 0 \| 0 \| verify-collect \|$/m, 'the refreshed counts are written');
+  assert.match(md, /^\| \*\*Total\*\* \| 3 phase\(s\) \| 5 \| 0 \| 0 \| 3 of 3 counted \|$/m);
+  assert.match(md, /^## Sub-features$/m, 'the rest of EPIC.md survives');
+  assert.match(md, /^## Layout$/m);
+});
+
+test('epic-close --dry-run reports the result without writing', () => {
+  const dir = epicProject();
+  for (const f of ['pay-a', 'pay-b', 'pay-c']) writeVerification(dir, f, 'passed', { verified: ['TC-1'] });
+  const before = epicMd(dir);
+  const r = run(['epic-close', '--epic', 'pay', '--dry-run'], dir);
+  assert.equal(r.ok, true);
+  assert.equal(r.data.dryRun, true);
+  assert.equal(r.data.status, 'closed');
+  assert.deepEqual(r.data.totals, { verified: 3, failed: 0, notVerified: 0, uncounted: [] });
+  assert.equal(epicMd(dir), before, 'EPIC.md untouched on a dry run');
+});
+
+test('epic-close: missing epic, missing --epic and an epic without sub-features are errors', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  assert.match(run(['epic-close'], dir).error, /^MISSING_ARG:/);
+  assert.match(run(['epic-close', '--epic', 'ghost'], dir).error, /^EPIC_NOT_FOUND:/);
+  assert.equal(run(['epic-new', '--name', 'empty'], dir).ok, true);
+  assert.match(run(['epic-close', '--epic', 'empty'], dir).error, /^EPIC_NO_SUBFEATURES:/);
+});
+
+// ---------------------------------------------------------------------------
+// epic-list: a `## Sub-features` section LAST in EPIC.md. The section regex used
+// `\Z`, which JS reads as a literal "Z", so such an epic listed no sub-features.
+// ---------------------------------------------------------------------------
+
+test('epic-list counts sub-features when that section ends the file', () => {
+  const dir = tmpProject();
+  initProject(dir);
+  const epicDir = path.join(dir, '.spec-flow', 'epics', 'tail');
+  fs.mkdirSync(epicDir, { recursive: true });
+  fs.writeFileSync(path.join(epicDir, 'EPIC.md'),
+    '<!-- spec-flow epic record -->\nid: tail\nname: tail\nstatus: active\n\n## Sub-features\n\n- tail-a\n- tail-b\n');
+  const r = run(['epic-list'], dir);
+  assert.equal(r.ok, true, 'epic-list should succeed');
+  const entry = r.data.epics.find(e => e.id === 'tail');
+  assert.ok(entry, 'should list the epic');
+  assert.equal(entry.subCount, 2, 'both sub-features are counted');
+});
+
+test('epic-close: counts come from machine-written sources only, never from hand-written prose', () => {
+  // A hand-written VERIFICATION.md lists a few notable cases as bullets; summing
+  // them reported "0 verified" for a phase that passed 146 tests.
+  const dir = epicProject();
+  // pay-a: verify-collect summary table (wins over its bullets)
+  writeVerification(dir, 'pay-a', 'passed', { verified: ['TC-1'] });
+  const fa = path.join(dir, '.spec-flow', 'specs', 'pay-a', 'VERIFICATION.md');
+  fs.writeFileSync(fa, fs.readFileSync(fa, 'utf8').replace('## must_haves',
+    '## Summary\n\n### By suite\n\n| Suite | Passed | Failed | Not verified | Total |\n| --- | ---: | ---: | ---: | ---: |\n| s1 | 140 | 0 | 3 | 143 |\n| **Total** | 140 | 0 | 3 | 143 |\n\n## must_haves'));
+  // pay-b: hand-written, but the runner's merged result is next to the checklist
+  const db = path.join(dir, '.spec-flow', 'specs', 'pay-b');
+  fs.mkdirSync(path.join(db, 'run'), { recursive: true });
+  fs.writeFileSync(path.join(db, 'VERIFICATION.md'), '# VERIFICATION\n\nstatus: passed\n\n| PASS | FAIL |\n| 9 | 0 |\n\n- TC-7: NOT VERIFIED — phone\n');
+  fs.writeFileSync(path.join(db, 'run', 'last-result.json'), JSON.stringify({ passed: [], failed: [], tests: [
+    { id: 'TC-1', status: 'passed' }, { id: 'TC-2', status: 'passed' }, { id: 'TC-7', status: 'not_verified' }] }));
+  // pay-c: hand-written, nothing machine-readable
+  const dc = path.join(dir, '.spec-flow', 'specs', 'pay-c');
+  fs.mkdirSync(dc, { recursive: true });
+  fs.writeFileSync(path.join(dc, 'VERIFICATION.md'), '# VERIFICATION\n\nstatus: passed\n\n### NOT VERIFIED\n\n- TC-15: phone\n');
+
+  const r = run(['epic-close', '--epic', 'pay', '--dry-run'], dir);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual(r.data.phases.map(p => [p.feature, p.verified, p.failed, p.notVerified, p.countsFrom]), [
+    ['pay-a', 140, 0, 3, 'summary'],
+    ['pay-b', 2, 0, 1, 'run-result'],
+    ['pay-c', null, null, null, null],
+  ]);
+  assert.deepEqual(r.data.totals, { verified: 142, failed: 0, notVerified: 4, uncounted: ['pay-c'] });
+});

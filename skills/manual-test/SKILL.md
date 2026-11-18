@@ -29,10 +29,12 @@ scripts/api.sh PRIME                           # detect stack + auth + port + cr
 scripts/test-user.sh                           # auto-pick + cache active test user (DB + Keycloak realm)
 scripts/checklist-init.sh <feature>            # REQUIRED if no CHECKLIST.yaml exists — generates scaffold
 scripts/lint-checklist.sh <feature>            # gate: refuses TODO/SELECT-1 markers + unresolved templates
-scripts/run-checklist.sh  <feature> [--tag smoke|regression] [--id TEST-ID]
-                                               # THE entry point for executing tests. Lints first, runs
-                                               # setup precondition SQL, fires each test, asserts body
-                                               # + status, runs verify SQL, prints PASS/FAIL/SKIP.
+scripts/run-checklist.sh  <feature> [--tag smoke|regression] [--id TEST-ID] [--rerun-failed]
+                                               # THE entry point for executing tests. Sources run/env.sh,
+                                               # preflights missing ${VARS}, lints, runs setup, fires each
+                                               # test, asserts body + status, runs verify (sql | exec |
+                                               # kafka), prints PASS/FAIL/NOT VERIFIED, keeps the merged
+                                               # result in run/last-result.json (--rerun-failed reads it).
                                                # Ad-hoc curl is NOT a substitute — add a test instead.
 ```
 
@@ -233,7 +235,7 @@ Open the relevant file when you hit the topic — don't preload.
 
 | Script | Purpose |
 |--------|---------|
-| **`scripts/run-checklist.sh <feature> [--tag T] [--id ID]`** | **Test executor — the ONLY supported way to run tests.** Lints, resolves tokens, runs setup SQL, fires each test (HTTP), asserts status + body, runs verify SQL, prints pass/fail summary. Exit non-zero on any failure. Hard Rule #6 enforcement lives here. |
+| **`scripts/run-checklist.sh <feature> [--tag T] [--id ID]`** | **Test executor — the ONLY supported way to run tests.** Sources `run/env.sh`, preflights missing `${VARS}`, lints, resolves tokens lazily (incl. login `http:` tokens), runs setup, fires each test (HTTP/Kafka), asserts status + body, runs verify (sql / exec / kafka), prints PASS / FAIL / NOT VERIFIED. Every exec/SQL step has a timeout (default 5m). A row that asserted nothing is NOT VERIFIED, never PASS. `--rerun-failed` reruns only last run's failures. Exit non-zero on any failure. Hard Rule #6 enforcement lives here. |
 | **`scripts/lint-checklist.sh <feature>`** | Pre-flight gate. Fails on `TODO` markers, placeholder `SELECT 1 --`, unresolved `{paramName}` path templates, missing `verify:` blocks (unless tagged `no-verify`). Always run before `run-checklist.sh`; the runner calls it implicitly too. |
 | **`scripts/api.sh PRIME [--refresh] \| CONTEXT [--refresh] \| RESTART \| FRESH \| REPEAT \| STATE \| CLEAR \| METHOD PATH [...]`** | **Discovery + freshness entry point.** On PRIME: reads PROJECT_CONTEXT.yaml if fresh, else runs full discovery and writes context. `METHOD PATH` is for one-off probes during DISCOVERY only — NOT a substitute for `run-checklist.sh`. See `references/lazy-mode.md`. |
 | **`scripts/checklist-init.sh <feature> [--path /api/v1/prefix]`** | **Generate CHECKLIST.yaml scaffold** for a feature. Scans codebase for matching endpoints (Java: `@GetMapping` etc.; Summer: `@Handler`). Writes to `.claude/docs/manual-tests/features/<feature>/CHECKLIST.yaml`. Run when no checklist exists. |

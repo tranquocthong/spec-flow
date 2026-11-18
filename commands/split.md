@@ -150,6 +150,8 @@ Each sub-feature then runs the **normal pipeline independently**:
 
 When the SRS changes later, `/sf:resync` uses `trace-impact` to identify which sub-feature(s) are affected — only those sub-features need to be re-synced. This is the blast-radius reduction the split achieves.
 
+When every sub-feature is verified, close the epic with `node ${CLAUDE_PLUGIN_ROOT}/bin/flow-tools.cjs epic-close --epic <epic-slug>` (add `--dry-run` to preview). It refuses with the full list of unverified phases, or writes a `## Close-out` table into `EPIC.md` and sets `status: closed`.
+
 ---
 
 ## Pipeline recap

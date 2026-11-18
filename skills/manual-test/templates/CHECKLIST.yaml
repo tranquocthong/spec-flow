@@ -18,11 +18,13 @@ config:
     RESOURCE_NAME: my-service
     FEATURE: example-feature
   base_url: http://localhost:${SERVER_PORT:-8080}
-  # Default database. Only `database:` is read here — host/port/user/password are
-  # auto-discovered per run by scripts/db-creds.sh (.env / application.yml), so
-  # hardcoding them here would override a correct discovery with a stale guess.
+  # Default database. With only `database:` set, host/port/user/password are
+  # auto-discovered per run by scripts/db-creds.sh (.env / application.yml). Set
+  # host/port/user (alias username)/password here only when discovery is wrong.
   db:
     database: ${DB_NAME}
+  # Every exec/SQL step is killed after this (step `timeout:` / test `timeout:` win).
+  # step_timeout: 5m
   # Multi-service: named alternate databases, the DB-side twin of `base_urls:`.
   # A step targets one with `db_ref: <name>` (setup / teardown / verify / poll /
   # cleanup). A value is either a plain database NAME (same server) or a mapping;
@@ -40,6 +42,13 @@ config:
 # In a test, `token: <name>` must match a key here. For an UNAUTHENTICATED request
 # (401 / public-endpoint tests) write `token: none` or omit the `token:` line — both
 # send no auth header at all.
+# Tokens resolve lazily — only when a test uses them. When the API mints its own
+# tokens, call its login/register endpoint instead of passing Authorization headers
+# by hand in every row (scope: run | suite | test; test = a fresh account per test):
+#   owner:
+#     http: {method: POST, path: /auth/login, body: {email: "${OWNER_EMAIL}", password: "${OWNER_PASSWORD}"}}
+#     token_path: "$.accessToken"
+#     capture: {OWNER_ID: "$.accountId"}
 tokens:
   user_token:
     payload: '{"iat":1772680061,"exp":2088040061,"sub":"${USER_ID}"}'
